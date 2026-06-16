@@ -1,0 +1,303 @@
+"""Structured MCP error envelopes for vep-link.
+
+The envelope shape is what an LLM client branches on, so codes are deterministic
+per exception class: a prompt can recover (retry, switch tool, reformulate input)
+without scraping free text. Every top-level tool body runs inside
+:func:`run_mcp_tool`, which converts any raised exception into the canonical
+envelope built by :func:`mcp_tool_error`.
+
+Mapping is centralized here (mirroring the ``vep_link.exceptions`` docstrings):
+
+* Known :class:`~vep_link.exceptions.VepLinkError` subclasses map to a stable
+  ``error.code`` + a recovery hint. Subclass specificity matters --
+  :class:`~vep_link.exceptions.UnsupportedContigError` subclasses
+  :class:`~vep_link.exceptions.VariantParseError`, so it is checked FIRST and
+  classifies as ``unsupported_input`` rather than ``invalid_input``.
+* Anything else (an unmapped ``VepLinkError`` or a stray ``RuntimeError``) becomes
+  a sanitized ``internal_error``: the original text is never surfaced to the
+  client. Instead a fresh ``correlation_id`` is generated, embedded in the
+  client-facing message, and logged alongside the real exception so an operator
+  can join the two from logs.
+
+``install_validation_error_handler`` adapts the spliceailookup pattern to the
+FastMCP build in use: it wraps each registered tool's ``run`` so a FastMCP /
+pydantic argument-validation failure returns a structured ``invalid_input``
+envelope instead of an opaque framework error. The FastMCP internals are probed
+defensively (and fastmcp is imported lazily) so the function is import-safe and a
+best-effort no-op if the API differs.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+import structlog
+
+from vep_link.exceptions import (
+    AmbiguousMappingError,
+    DataNotFoundError,
+    EnsemblApiError,
+    RateLimitedError,
+    UnsupportedContigError,
+    UpstreamInputError,
+    UpstreamTimeoutError,
+    VariantParseError,
+    VepLinkError,
+)
+from vep_link.mcp.resources import build_meta
+
+logger = structlog.get_logger("vep_link.mcp.errors")
+
+# The ten deterministic error codes, in spec (§7) order. Surfaced verbatim in the
+# capabilities document so a client can branch on them ahead of time.
+ERROR_CODES: tuple[str, ...] = (
+    "invalid_input",
+    "unsupported_input",
+    "not_found",
+    "build_mismatch",
+    "ambiguous",
+    "rate_limited",
+    "upstream_unavailable",
+    "upstream_timeout",
+    "output_validation_failed",
+    "internal_error",
+)
+
+# Always-on safe entry point a confused client can fall back to.
+_FALLBACK_TOOL = "get_capabilities"
+
+# Recovery text for the internal_error fallthrough; every mapped exception resolves
+# its own recovery from ``_EXCEPTION_MAP`` below.
+_INTERNAL_ERROR_RECOVERY = (
+    "Unexpected server error; retry later. Reference the correlation id if reporting."
+)
+
+# Ordered MOST-SPECIFIC FIRST. UnsupportedContigError subclasses VariantParseError,
+# so it must precede VariantParseError or it would be mis-classified as invalid_input.
+_EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str], ...] = (
+    (
+        UnsupportedContigError,
+        "unsupported_input",
+        "This input/contig is not supported for the requested operation.",
+    ),
+    (
+        VariantParseError,
+        "invalid_input",
+        "Check the variant format: coordinate (CHR-POS-REF-ALT), rsID, HGVS, or SPDI.",
+    ),
+    (
+        UpstreamInputError,
+        "invalid_input",
+        "Ensembl rejected the request; verify the input and assembly.",
+    ),
+    (
+        DataNotFoundError,
+        "not_found",
+        "No data found; try resolve_variant first to validate the input.",
+    ),
+    (
+        AmbiguousMappingError,
+        "ambiguous",
+        "The liftover is ambiguous (multiple mappings); inspect the region manually.",
+    ),
+    (
+        RateLimitedError,
+        "rate_limited",
+        "Upstream rate limit hit; retry with exponential backoff or fewer parallel calls.",
+    ),
+    (
+        UpstreamTimeoutError,
+        "upstream_timeout",
+        "Upstream timed out; retry shortly.",
+    ),
+    (
+        EnsemblApiError,
+        "upstream_unavailable",
+        "Ensembl REST is temporarily unavailable; retry shortly.",
+    ),
+)
+
+
+@dataclass
+class McpErrorContext:
+    """Per-call context so error envelopes can be stamped and made actionable.
+
+    ``next_commands`` are ready-to-call follow-ups (e.g. a ``resolve_variant``
+    suggestion); ``assembly`` is echoed into ``_meta`` when present.
+    """
+
+    tool_name: str
+    variant: str | None = None
+    assembly: str | None = None
+    next_commands: list | None = None
+
+
+def _classify(exc: BaseException) -> tuple[str, str] | None:
+    """Return ``(code, recovery)`` for a known exception, else ``None``.
+
+    Walks ``_EXCEPTION_MAP`` most-specific-first; the first ``isinstance`` match
+    wins, so subclass relationships (UnsupportedContigError < VariantParseError)
+    are honored.
+    """
+    for exc_type, code, recovery in _EXCEPTION_MAP:
+        if isinstance(exc, exc_type):
+            return code, recovery
+    return None
+
+
+def mcp_tool_error(
+    *,
+    code: str,
+    message: str,
+    recovery: str,
+    ctx: McpErrorContext,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical structured error envelope.
+
+    Shape (spec §7): an ``error`` block the client branches on plus a ``_meta``
+    block built by :func:`~vep_link.mcp.resources.build_meta` (which already
+    stamps ``capabilities_version`` and ``unsafe_for_clinical_use``). ``request_id``
+    defaults to a fresh 12-hex-char id when not supplied by the caller.
+    """
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "recovery": recovery,
+            "fallback_tool": _FALLBACK_TOOL,
+            "next_commands": ctx.next_commands or [],
+        },
+        "_meta": build_meta(
+            tool=ctx.tool_name,
+            request_id=request_id or uuid.uuid4().hex[:12],
+            assembly=ctx.assembly,
+            extra={"unsafe_for_clinical_use": True},
+        ),
+    }
+
+
+def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[str, Any]:
+    """Build a sanitized ``internal_error`` envelope and log the real exception.
+
+    The original exception text is NEVER surfaced to the client. A fresh
+    ``correlation_id`` is generated, embedded in the client-facing message, and
+    logged with the real exception at error level so an operator can correlate
+    the redacted client message with the unredacted server log.
+    """
+    correlation_id = uuid.uuid4().hex[:12]
+    # Log the real exception (type + repr + traceback) under the correlation id so
+    # an operator can join the redacted client message to the full server-side
+    # detail. ``exc_info`` is rendered by the configured ``format_exc_info``
+    # processor (see ``vep_link.logging_config``).
+    logger.error(
+        "mcp_internal_error",
+        tool=ctx.tool_name,
+        correlation_id=correlation_id,
+        exc_type=type(exc).__name__,
+        exc_repr=repr(exc),
+        exc_info=exc,
+    )
+    message = f"Internal error in {ctx.tool_name} (correlation_id={correlation_id}). Retry later."
+    return mcp_tool_error(
+        code="internal_error",
+        message=message,
+        recovery=_INTERNAL_ERROR_RECOVERY,
+        ctx=ctx,
+        request_id=correlation_id,
+    )
+
+
+async def run_mcp_tool(
+    tool_name: str,
+    body: Callable[[], Awaitable[dict[str, Any]]],
+    ctx: McpErrorContext,
+) -> dict[str, Any]:
+    """Execute a tool ``body``, converting any exception into an error envelope.
+
+    * On success: the body's dict is returned UNCHANGED (it already carries its
+      own ``_meta``).
+    * On a known :class:`~vep_link.exceptions.VepLinkError` subclass: mapped to
+      the matching code + recovery via :func:`_classify` and returned as an
+      envelope.
+    * On anything else: a sanitized ``internal_error`` envelope with a correlation
+      id; the original exception text is not leaked.
+    """
+    try:
+        return await body()
+    except VepLinkError as exc:
+        classified = _classify(exc)
+        if classified is None:
+            return _internal_error_envelope(exc, ctx)
+        code, recovery = classified
+        message = str(exc) or type(exc).__name__
+        return mcp_tool_error(code=code, message=message, recovery=recovery, ctx=ctx)
+    except Exception as exc:  # error-boundary contract: every other fault -> internal_error
+        return _internal_error_envelope(exc, ctx)
+
+
+def install_validation_error_handler(mcp: Any) -> None:
+    """Make FastMCP argument-validation failures return an ``invalid_input`` envelope.
+
+    Adapts the spliceailookup pattern to the local FastMCP build: each registered
+    tool's ``run`` is wrapped so a pydantic ``ValidationError`` (raised when a
+    client passes arguments that violate the tool schema) is converted into the
+    structured ``invalid_input`` envelope rather than surfacing as an opaque
+    framework error.
+
+    The FastMCP internals are probed defensively and ``fastmcp`` / ``pydantic`` are
+    imported lazily, so this is import-safe and a best-effort no-op when the API
+    differs (e.g. passed a non-FastMCP stub). It is idempotent: already-wrapped
+    tools are skipped.
+    """
+    try:  # lazy + defensive: never fail at import or on a foreign object.
+        from pydantic import ValidationError as PydanticValidationError
+    except Exception:  # best-effort; pydantic is always present in prod.
+        return
+
+    components: dict[Any, Any] = {}
+    local_provider = getattr(mcp, "_local_provider", None)
+    provider_components = getattr(local_provider, "_components", None)
+    if isinstance(provider_components, dict):
+        components.update(provider_components)
+    # Older FastMCP builds expose tools under a _tool_manager._tools dict.
+    tool_manager = getattr(mcp, "_tool_manager", None)
+    legacy_tools = getattr(tool_manager, "_tools", None)
+    if isinstance(legacy_tools, dict):
+        components.update(legacy_tools)
+
+    for tool in components.values():
+        if not hasattr(tool, "run") or getattr(tool, "_vep_validation_wrapped", False):
+            continue
+        original_run = tool.run
+        tool_label = str(getattr(tool, "name", "unknown"))
+
+        async def wrapped_run(
+            arguments: dict[str, Any],
+            *,
+            _original_run: Callable[[dict[str, Any]], Awaitable[Any]] = original_run,
+            _tool_name: str = tool_label,
+        ) -> Any:
+            try:
+                return await _original_run(arguments)
+            except PydanticValidationError as exc:
+                ctx = McpErrorContext(tool_name=_tool_name)
+                return mcp_tool_error(
+                    code="invalid_input",
+                    message=f"Invalid arguments for {_tool_name}: {exc.error_count()} error(s).",
+                    recovery=(
+                        "Fix the tool arguments to match the schema; "
+                        "call get_capabilities for accepted parameters."
+                    ),
+                    ctx=ctx,
+                )
+
+        try:
+            object.__setattr__(tool, "run", wrapped_run)
+            object.__setattr__(tool, "_vep_validation_wrapped", True)
+        except Exception as exc:  # frozen/immutable tool: skip it, don't fail install.
+            logger.debug("validation_handler_skip", tool=tool_label, exc_type=type(exc).__name__)
+            continue
