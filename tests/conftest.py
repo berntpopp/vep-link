@@ -23,28 +23,29 @@ from vep_link.logging_config import configure_logging
 # ConsoleRenderer "pretty exceptions" warning during error-path tests.
 configure_logging("WARNING", "json")
 
-_REAL_SOCKET = socket.socket
 
-
-class _BlockedSocket(socket.socket):
-    """A socket whose connect attempts raise, blocking real network egress."""
-
-    def connect(self, *args: Any, **kwargs: Any) -> None:
-        raise RuntimeError(
-            "Real network access is blocked in tests. Mock Ensembl with respx, "
-            "or mark the test `integration` + `allow_network`."
-        )
-
-    def connect_ex(self, *args: Any, **kwargs: Any) -> int:
-        raise RuntimeError("Real network access is blocked in tests (connect_ex).")
+def _blocked_network(*_args: Any, **_kwargs: Any) -> Any:
+    """Raise instead of resolving/opening a real outbound connection."""
+    raise RuntimeError(
+        "Real network access is blocked in tests. Mock Ensembl with respx, "
+        "or mark the test `integration` + `allow_network`."
+    )
 
 
 @pytest.fixture(autouse=True)
 def _no_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Block real outbound sockets unless the test opts in with `allow_network`."""
+    """Block real outbound network egress unless the test opts in with `allow_network`.
+
+    Patches the DNS-resolution and connection-helper entry points (not the
+    ``socket.socket`` class itself), so it never allocates a file descriptor and
+    cannot leak or interfere with in-process ASGI/respx transports or
+    pytest-xdist worker IPC. Any genuine outbound hostname connection routes
+    through ``getaddrinfo``/``create_connection`` and fails loudly.
+    """
     if request.node.get_closest_marker("allow_network"):
         return
-    monkeypatch.setattr(socket, "socket", _BlockedSocket)
+    monkeypatch.setattr(socket, "getaddrinfo", _blocked_network)
+    monkeypatch.setattr(socket, "create_connection", _blocked_network)
 
 
 def pytest_configure(config: pytest.Config) -> None:

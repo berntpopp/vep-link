@@ -161,10 +161,16 @@ vep-link version
 ```bash
 make install       # uv sync --group dev
 make dev           # dev server (console logs)
-make test          # unit tests
+make test          # unit tests (single process)
+make test-fast     # parallel tests; xdist workers capped (PYTEST_MAXPROCESSES, default 4)
 make test-cov      # tests with coverage (80% floor)
 make ci-local      # format-check, lint, line-budget, typecheck, tests
 ```
+
+`make test-fast` / `ci-local` cap pytest-xdist at `PYTEST_MAXPROCESSES` (default
+`4`) so `-n auto` does not spawn one heavy worker per core on a many-core host.
+Bump it on a big machine (`make test-fast PYTEST_MAXPROCESSES=12`) or use
+`make test` for the lowest footprint.
 
 All Ensembl calls in tests are mocked with `respx`; the no-network guard in
 `tests/conftest.py` fails any un-mocked request. Live tests are marked

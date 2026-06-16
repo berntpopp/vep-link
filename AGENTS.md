@@ -85,8 +85,13 @@ Hard cap: **600 lines per Python module** in `vep_link/`. Enforced by
 
 ## Testing Notes
 
-- `make test` runs deterministic unit tests from `tests/unit/`.
+- `make test` runs deterministic unit tests from `tests/unit/` (single process).
+- `make test-fast` / `make test-unit` run in parallel via pytest-xdist with the
+  worker count capped by `PYTEST_MAXPROCESSES` (default 4) so `-n auto` cannot
+  fan out to every core on a many-core host and OOM a RAM-constrained machine.
+  Override with `make test-fast PYTEST_MAXPROCESSES=8`, or use `make test` for a
+  single process.
 - `make test-integration` runs live Ensembl tests (may rate-limit).
-- `make test-cov` enforces the 80% coverage floor.
+- `make test-cov` enforces the 80% coverage floor (single process).
 - Treat failing checks as real issues unless you have clear evidence otherwise.
 - Do not broaden Ruff or mypy ignores to hide new issues.

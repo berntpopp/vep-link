@@ -4,6 +4,12 @@
 
 DOCKER_COMPOSE := $(shell if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo "docker compose"; fi)
 
+# Cap pytest-xdist workers so `-n auto` cannot fan out to every core on a
+# many-core host (e.g. 32 cores -> 32 heavy worker processes -> OOM on a
+# RAM-constrained machine). Override on the command line: `make test-fast
+# PYTEST_MAXPROCESSES=8`, or set 0/empty workers via `make test` (single process).
+PYTEST_MAXPROCESSES ?= 4
+
 help: ## Display this help message
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
@@ -71,11 +77,11 @@ typecheck-fresh: ## Clear mypy cache and run typecheck
 test: ## Run deterministic unit tests quickly
 	uv run pytest tests/unit -q
 
-test-fast: ## Run deterministic unit tests in parallel with pytest-xdist
-	uv run pytest tests/unit -q -n auto
+test-fast: ## Run deterministic unit tests in parallel (xdist workers capped by PYTEST_MAXPROCESSES)
+	uv run pytest tests/unit -q -n auto --maxprocesses=$(PYTEST_MAXPROCESSES)
 
-test-unit: ## Run unit tests in parallel
-	uv run pytest tests/unit -q -n auto
+test-unit: ## Run unit tests in parallel (xdist workers capped by PYTEST_MAXPROCESSES)
+	uv run pytest tests/unit -q -n auto --maxprocesses=$(PYTEST_MAXPROCESSES)
 
 test-integration: ## Run live integration tests against Ensembl REST
 	VEP_LINK_RUN_INTEGRATION=1 uv run pytest tests/integration -q -m integration
