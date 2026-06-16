@@ -15,6 +15,7 @@ from .extraction import (
     most_severe_transcript,
     prioritize_transcript,
 )
+from .vep_service import VepService
 
 __all__ = [
     "build_annotation",
@@ -22,4 +23,5 @@ __all__ = [
     "flatten_consequences",
     "most_severe_transcript",
     "prioritize_transcript",
+    "VepService",
 ]
