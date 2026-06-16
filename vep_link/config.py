@@ -136,6 +136,15 @@ class Settings(BaseSettings):
     CACHE_SIZE: int = 1024
     CACHE_TTL_SECONDS: int = 86400
 
+    # Upstream health monitoring. A per-assembly circuit breaker (fed by real
+    # call outcomes + a cheap background /info/ping probe) lets the server warn
+    # the LLM consumer early and fail fast when an Ensembl host is degraded.
+    HEALTH_PROBE_ENABLED: bool = True
+    HEALTH_PROBE_INTERVAL_SECONDS: float = 60.0
+    HEALTH_PROBE_TIMEOUT: float = 8.0
+    CIRCUIT_FAILURE_THRESHOLD: int = 3
+    CIRCUIT_COOLDOWN_SECONDS: float = 30.0
+
     # Transport.
     MCP_TRANSPORT: Literal["unified", "http"] = "unified"
     MCP_HOST: str = "127.0.0.1"

@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream health awareness.** A per-assembly circuit breaker (`UpstreamHealth`)
+  tracks the two Ensembl REST hosts, fed both passively (real tool-call outcomes)
+  and actively (a cheap `/info/ping` background probe every
+  `HEALTH_PROBE_INTERVAL_SECONDS`). The MCP layer now warns the consumer early:
+  - `_meta.upstream` on every tool response — compact per-assembly status plus an
+    `advice` line naming the healthy host when one is degraded.
+  - Upstream error envelopes carry `retryable: true`, `retry_after_s`, and a
+    fallback-to-healthy-assembly hint.
+  - **Fail fast**: when a host's circuit is open, tools return a clean
+    `upstream_unavailable` immediately instead of attempting and timing out.
+  - New `check_upstream_health` tool (live probe + snapshot), a readable
+    `vep://health` resource, and a live `upstream` summary in `get_capabilities`.
+  - New settings: `HEALTH_PROBE_ENABLED`, `HEALTH_PROBE_INTERVAL_SECONDS`,
+    `HEALTH_PROBE_TIMEOUT`, `CIRCUIT_FAILURE_THRESHOLD`, `CIRCUIT_COOLDOWN_SECONDS`.
+
 ### Fixed
 
 - Fail fast and cleanly when Ensembl REST is unhealthy. Previously a hung or

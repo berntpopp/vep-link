@@ -17,11 +17,16 @@ from pydantic import Field
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
 from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta
-from vep_link.mcp.tools._common import new_request_id
+from vep_link.mcp.tools._common import ensure_upstream_available, new_request_id
 from vep_link.models.enums import GenomeBuild
 
 
-def register_recode_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -> None:
+def register_recode_tools(
+    mcp: FastMCP,
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> None:
     """Register ``recode_variant`` on ``mcp``."""
 
     @mcp.tool(
@@ -60,7 +65,10 @@ def register_recode_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -
     ) -> dict[str, Any]:
         """Use this to translate a variant (or a batch, cap 200) between identifier systems -- rsID <-> HGVS (g./c./p./t.) <-> VCF string <-> SPDI -- without a full VEP annotation. Returns one result object per input. Use the optional fields filter to trim the payload to just the representations you need."""
 
+        health = health_factory() if health_factory else None
+
         async def call() -> dict[str, Any]:
+            ensure_upstream_available(health, assembly)
             service = service_factory()
             results = await service.recode(variants, GenomeBuild(assembly), fields=fields)
             return {
@@ -76,5 +84,5 @@ def register_recode_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -
         return await run_mcp_tool(
             "recode_variant",
             call,
-            McpErrorContext(tool_name="recode_variant", assembly=assembly),
+            McpErrorContext(tool_name="recode_variant", assembly=assembly, health=health),
         )

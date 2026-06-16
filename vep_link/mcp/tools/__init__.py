@@ -18,6 +18,7 @@ from fastmcp import FastMCP
 
 from vep_link.mcp.tools.annotate import register_annotate_tools
 from vep_link.mcp.tools.capabilities import register_capabilities_tools
+from vep_link.mcp.tools.health import register_health_tools
 from vep_link.mcp.tools.liftover import register_liftover_tools
 from vep_link.mcp.tools.recode import register_recode_tools
 from vep_link.mcp.tools.resolve import register_resolve_tools
@@ -25,14 +26,21 @@ from vep_link.mcp.tools.resolve import register_resolve_tools
 __all__ = ["register_vep_tools"]
 
 
-def register_vep_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -> None:
-    """Register all six vep-link tools on ``mcp``.
+def register_vep_tools(
+    mcp: FastMCP,
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> None:
+    """Register all vep-link tools on ``mcp``.
 
     ``service_factory`` is a lazy callable returning the shared ``VepService``;
-    each tool obtains the service via ``service_factory()`` at call time.
+    ``health_factory`` (optional) returns the shared ``UpstreamHealth`` monitor so
+    tools can fail fast on a degraded host and stamp ``_meta.upstream``.
     """
-    register_capabilities_tools(mcp, service_factory=service_factory)
-    register_resolve_tools(mcp, service_factory=service_factory)
-    register_recode_tools(mcp, service_factory=service_factory)
-    register_annotate_tools(mcp, service_factory=service_factory)
-    register_liftover_tools(mcp, service_factory=service_factory)
+    register_capabilities_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    register_resolve_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    register_recode_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    register_annotate_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    register_liftover_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    register_health_tools(mcp, service_factory=service_factory, health_factory=health_factory)

@@ -51,18 +51,45 @@ _INSTRUCTIONS = (
 )
 
 
-def create_vep_mcp(*, service_factory: Callable[[], Any]) -> FastMCP:
+def create_vep_mcp(
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> FastMCP:
     """Build the vep-link MCP server wired to ``service_factory``.
 
     ``service_factory`` is a lazy callable returning the shared ``VepService``;
     deferring construction lets the HTTP host build the service in its lifespan
-    rather than at import time.
+    rather than at import time. ``health_factory`` (optional) returns the shared
+    ``UpstreamHealth`` monitor; when omitted, a passive monitor (no background
+    probe) is created so tools still stamp ``_meta.upstream`` and the
+    ``vep://health`` resource works in stdio mode.
     """
+    if health_factory is None:
+        from vep_link.api.health import UpstreamHealth
+        from vep_link.config import settings as _settings
+
+        _default_health = UpstreamHealth(_settings)
+
+        def health_factory() -> Any:
+            return _default_health
+
     mcp: FastMCP = FastMCP(
         name="vep-link",
         instructions=_INSTRUCTIONS,
         mask_error_details=True,
     )
-    register_vep_tools(mcp, service_factory=service_factory)
+    register_vep_tools(mcp, service_factory=service_factory, health_factory=health_factory)
+    _register_health_resource(mcp, health_factory=health_factory)
     install_validation_error_handler(mcp)
     return mcp
+
+
+def _register_health_resource(mcp: FastMCP, *, health_factory: Callable[[], Any]) -> None:
+    """Expose a readable ``vep://health`` resource (recomputed on each read)."""
+
+    @mcp.resource("vep://health", mime_type="application/json")
+    def health_resource() -> dict[str, Any]:
+        """Live per-assembly Ensembl REST health (circuit-breaker snapshot)."""
+        snapshot: dict[str, Any] = health_factory().snapshot()
+        return snapshot

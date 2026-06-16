@@ -20,9 +20,12 @@ logging and hands the app to ``uvicorn.run`` (tests patch ``uvicorn.run``).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+import structlog
 import uvicorn
 from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI
@@ -30,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from vep_link import __version__
 from vep_link.api.ensembl_client import EnsemblClient
+from vep_link.api.health import UpstreamHealth
 from vep_link.config import ServerConfig, settings
 from vep_link.logging_config import configure_logging
 from vep_link.mcp.facade import create_vep_mcp
@@ -37,6 +41,22 @@ from vep_link.services.vep_service import VepService
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+logger = structlog.get_logger("vep_link.server_manager")
+
+
+async def _poll_health(monitor: UpstreamHealth, interval: float) -> None:
+    """Background loop: refresh the upstream-health probe every ``interval`` seconds.
+
+    Exceptions are swallowed (and logged) so a transient probe fault never kills
+    the poller; the loop ends only on cancellation at shutdown.
+    """
+    while True:
+        try:
+            await monitor.refresh()
+        except Exception:
+            logger.debug("health_poll_failed", exc_info=True)
+        await asyncio.sleep(interval)
 
 
 def _compose_lifespan(app: FastAPI, mcp_app: Any) -> None:
@@ -71,9 +91,21 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
         client = EnsemblClient(settings)
         service = VepService(client, settings)
         app.state.vep_service = service
+        monitor = UpstreamHealth(settings)
+        app.state.upstream_health = monitor
+        poller: asyncio.Task[None] | None = None
+        if settings.HEALTH_PROBE_ENABLED:
+            poller = asyncio.create_task(
+                _poll_health(monitor, settings.HEALTH_PROBE_INTERVAL_SECONDS)
+            )
         try:
             yield
         finally:
+            if poller is not None:
+                poller.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poller
+            await monitor.aclose()
             await app.state.vep_service.aclose()
 
     app = FastAPI(
@@ -98,7 +130,10 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "healthy", "service": "vep-link", "version": __version__}
 
-    mcp = create_vep_mcp(service_factory=lambda: app.state.vep_service)
+    mcp = create_vep_mcp(
+        service_factory=lambda: app.state.vep_service,
+        health_factory=lambda: app.state.upstream_health,
+    )
     mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
     _compose_lifespan(app, mcp_app)
     app.mount(cfg.mcp_path, mcp_app)

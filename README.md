@@ -41,6 +41,17 @@ variants with a short inter-chunk delay and a concurrency cap.
 | `annotate_variant` | Full VEP annotation for one variant, shaped to a `response_mode`. |
 | `annotate_variants_batch` | Batch VEP annotation (≤200/call, internal chunking + dedup, per-input errors). |
 | `liftover_variant` | Lift a coordinate between GRCh37 and GRCh38. |
+| `check_upstream_health` | Live Ensembl REST readiness per assembly (circuit-breaker snapshot). |
+
+### Upstream health awareness
+
+A per-assembly circuit breaker tracks the two Ensembl REST hosts (fed by real
+call outcomes plus a cheap background `/info/ping` probe). When a host is
+degraded, vep-link **warns early and fails fast** instead of hanging: every
+response carries a compact `_meta.upstream` status, retryable upstream errors
+include `retry_after_s` and a "retry on the healthy assembly" hint, and an open
+circuit short-circuits to a clean `upstream_unavailable`. Query it explicitly
+with `check_upstream_health` or read the `vep://health` resource.
 
 See [`docs/mcp-tools.md`](docs/mcp-tools.md) for the full per-tool reference.
 
@@ -140,6 +151,11 @@ All settings use the `VEP_LINK_` env prefix (and an optional `.env`; copy
 | `VEP_LINK_INTER_CHUNK_DELAY_MS` | `100` | Politeness delay between chunks. |
 | `VEP_LINK_CACHE_SIZE` | `1024` | In-process LRU cache entries. |
 | `VEP_LINK_CACHE_TTL_SECONDS` | `86400` | Cache entry TTL. |
+| `VEP_LINK_HEALTH_PROBE_ENABLED` | `true` | Run the background upstream-health probe. |
+| `VEP_LINK_HEALTH_PROBE_INTERVAL_SECONDS` | `60` | Seconds between `/info/ping` probes per host. |
+| `VEP_LINK_HEALTH_PROBE_TIMEOUT` | `8` | Per-probe timeout (s). |
+| `VEP_LINK_CIRCUIT_FAILURE_THRESHOLD` | `3` | Consecutive failures before a host's circuit opens. |
+| `VEP_LINK_CIRCUIT_COOLDOWN_SECONDS` | `30` | Open-circuit cooldown before a recovery probe. |
 | `VEP_LINK_MCP_TRANSPORT` | `unified` | `unified` (host + MCP) or `http` (MCP only). |
 | `VEP_LINK_MCP_HOST` | `127.0.0.1` | Bind host. |
 | `VEP_LINK_MCP_PORT` | `8000` | Bind port. |

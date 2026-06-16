@@ -34,6 +34,7 @@ EXPECTED_TOOLS = [
     "annotate_variant",
     "annotate_variants_batch",
     "liftover_variant",
+    "check_upstream_health",
 ]
 
 EXPECTED_ERROR_CODES = [
@@ -242,6 +243,7 @@ def test_server_capabilities_resources() -> None:
         "vep://reference",
         "vep://citations",
         "vep://research-use",
+        "vep://health",
     ]
 
 

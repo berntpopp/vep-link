@@ -32,9 +32,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
+
+if TYPE_CHECKING:
+    from vep_link.api.health import UpstreamHealth
 
 from vep_link.exceptions import (
     AmbiguousMappingError,
@@ -68,6 +71,15 @@ ERROR_CODES: tuple[str, ...] = (
 
 # Always-on safe entry point a confused client can fall back to.
 _FALLBACK_TOOL = "get_capabilities"
+
+# Error codes that represent a transient upstream fault: the client should back
+# off and retry (or switch assembly), not reformulate its input. These also feed
+# the circuit breaker's failure count.
+_RETRYABLE_CODES: frozenset[str] = frozenset(
+    {"rate_limited", "upstream_unavailable", "upstream_timeout"}
+)
+# Default backoff hint surfaced as ``error.retry_after_s`` for retryable faults.
+_DEFAULT_RETRY_AFTER_S = 10
 
 # Recovery text for the internal_error fallthrough; every mapped exception resolves
 # its own recovery from ``_EXCEPTION_MAP`` below.
@@ -133,6 +145,10 @@ class McpErrorContext:
     variant: str | None = None
     assembly: str | None = None
     next_commands: list | None = None
+    # The shared upstream-health monitor. When set, ``run_mcp_tool`` records the
+    # call outcome against ``assembly`` and injects ``_meta.upstream`` into every
+    # success and error envelope.
+    health: UpstreamHealth | None = None
 
 
 def _classify(exc: BaseException) -> tuple[str, str] | None:
@@ -155,6 +171,7 @@ def mcp_tool_error(
     recovery: str,
     ctx: McpErrorContext,
     request_id: str | None = None,
+    retry_after_s: int | None = None,
 ) -> dict[str, Any]:
     """Build the canonical structured error envelope.
 
@@ -162,15 +179,24 @@ def mcp_tool_error(
     block built by :func:`~vep_link.mcp.resources.build_meta` (which already
     stamps ``capabilities_version`` and ``unsafe_for_clinical_use``). ``request_id``
     defaults to a fresh 12-hex-char id when not supplied by the caller.
+
+    Retryable upstream faults additionally carry ``retryable: true`` and a
+    ``retry_after_s`` backoff hint so an LLM can pace a retry instead of giving up.
     """
-    return {
-        "error": {
-            "code": code,
-            "message": message,
-            "recovery": recovery,
-            "fallback_tool": _FALLBACK_TOOL,
-            "next_commands": ctx.next_commands or [],
-        },
+    error_block: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "recovery": recovery,
+        "fallback_tool": _FALLBACK_TOOL,
+        "next_commands": ctx.next_commands or [],
+        "retryable": code in _RETRYABLE_CODES,
+    }
+    if code in _RETRYABLE_CODES:
+        error_block["retry_after_s"] = (
+            retry_after_s if retry_after_s is not None else _DEFAULT_RETRY_AFTER_S
+        )
+    envelope = {
+        "error": error_block,
         "_meta": build_meta(
             tool=ctx.tool_name,
             request_id=request_id or uuid.uuid4().hex[:12],
@@ -178,6 +204,17 @@ def mcp_tool_error(
             extra={"unsafe_for_clinical_use": True},
         ),
     }
+    _inject_upstream(envelope, ctx)
+    return envelope
+
+
+def _inject_upstream(envelope: dict[str, Any], ctx: McpErrorContext) -> None:
+    """Attach the compact ``_meta.upstream`` health hint, if a monitor is present."""
+    if ctx.health is None:
+        return
+    meta = envelope.get("_meta")
+    if isinstance(meta, dict):
+        meta.setdefault("upstream", ctx.health.meta_hint())
 
 
 def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[str, Any]:
@@ -227,16 +264,32 @@ async def run_mcp_tool(
       id; the original exception text is not leaked.
     """
     try:
-        return await body()
+        result = await body()
     except VepLinkError as exc:
         classified = _classify(exc)
         if classified is None:
             return _internal_error_envelope(exc, ctx)
         code, recovery = classified
+        # A real upstream fault: feed the breaker and append the healthy-host
+        # advice (e.g. "GRCh37 is healthy -- retry there") to the recovery.
+        if code in _RETRYABLE_CODES and ctx.health is not None:
+            if ctx.assembly:
+                ctx.health.record_failure(ctx.assembly, exc)
+            advice = ctx.health.meta_hint().get("advice")
+            if advice:
+                recovery = f"{recovery} {advice}"
         message = str(exc) or type(exc).__name__
         return mcp_tool_error(code=code, message=message, recovery=recovery, ctx=ctx)
     except Exception as exc:  # error-boundary contract: every other fault -> internal_error
         return _internal_error_envelope(exc, ctx)
+
+    # Success: record a healthy outcome and stamp the live upstream hint.
+    if ctx.health is not None:
+        if ctx.assembly:
+            ctx.health.record_success(ctx.assembly)
+        if isinstance(result, dict):
+            _inject_upstream(result, ctx)
+    return result
 
 
 def install_validation_error_handler(mcp: Any) -> None:

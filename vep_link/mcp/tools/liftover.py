@@ -18,11 +18,16 @@ from vep_link.exceptions import UpstreamInputError
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
 from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta
-from vep_link.mcp.tools._common import new_request_id
+from vep_link.mcp.tools._common import ensure_upstream_available, new_request_id
 from vep_link.models.enums import GenomeBuild
 
 
-def register_liftover_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -> None:
+def register_liftover_tools(
+    mcp: FastMCP,
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> None:
     """Register ``liftover_variant`` on ``mcp``."""
 
     @mcp.tool(
@@ -55,9 +60,13 @@ def register_liftover_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
     ) -> dict[str, Any]:
         """Use this to map a genomic coordinate (CHR-POS-REF-ALT) from one human assembly to the other (GRCh37 <-> GRCh38) via the Ensembl assembly-map endpoint. The two assemblies must differ. A unique mapping returns the lifted coordinate; zero mappings -> not_found, multiple -> ambiguous. HGVS/rsID inputs are unsupported (resolve_variant them first)."""
 
+        health = health_factory() if health_factory else None
+
         async def call() -> dict[str, Any]:
             if from_assembly == to_assembly:
                 raise UpstreamInputError("from_assembly and to_assembly must differ")
+            # The assembly-map endpoint is served by the from_assembly host.
+            ensure_upstream_available(health, from_assembly)
             service = service_factory()
             result: dict[str, Any] = await service.liftover(
                 variant, GenomeBuild(from_assembly), GenomeBuild(to_assembly)
@@ -65,12 +74,14 @@ def register_liftover_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
             result["_meta"] = build_meta(
                 tool="liftover_variant",
                 request_id=new_request_id(),
-                assembly=to_assembly,
+                assembly=from_assembly,
             )
             return result
 
         return await run_mcp_tool(
             "liftover_variant",
             call,
-            McpErrorContext(tool_name="liftover_variant", variant=variant, assembly=to_assembly),
+            McpErrorContext(
+                tool_name="liftover_variant", variant=variant, assembly=from_assembly, health=health
+            ),
         )

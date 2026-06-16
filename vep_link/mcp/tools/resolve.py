@@ -18,11 +18,16 @@ from pydantic import Field
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
 from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta
-from vep_link.mcp.tools._common import new_request_id, next_command
+from vep_link.mcp.tools._common import ensure_upstream_available, new_request_id, next_command
 from vep_link.models.enums import GenomeBuild
 
 
-def register_resolve_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -> None:
+def register_resolve_tools(
+    mcp: FastMCP,
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> None:
     """Register ``resolve_variant`` on ``mcp``."""
 
     @mcp.tool(
@@ -51,7 +56,10 @@ def register_resolve_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) 
     ) -> dict[str, Any]:
         """Use this when the caller's variant is an rsID, HGVS, SPDI, or loosely formatted, and you need the canonical CHR-POS-REF-ALT plus gene_symbol and most_severe_consequence that the annotation tools build on. Coordinates are normalized locally; rsIDs/HGVS are recoded via Ensembl. Cheap (<1kB). Then call annotate_variant for the full VEP annotation."""
 
+        health = health_factory() if health_factory else None
+
         async def call() -> dict[str, Any]:
+            ensure_upstream_available(health, assembly)
             service = service_factory()
             result: dict[str, Any] = await service.resolve(variant, GenomeBuild(assembly))
             result["_meta"] = build_meta(
@@ -67,5 +75,7 @@ def register_resolve_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) 
         return await run_mcp_tool(
             "resolve_variant",
             call,
-            McpErrorContext(tool_name="resolve_variant", variant=variant, assembly=assembly),
+            McpErrorContext(
+                tool_name="resolve_variant", variant=variant, assembly=assembly, health=health
+            ),
         )

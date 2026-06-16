@@ -88,6 +88,15 @@ _TOOLS: list[dict[str, str]] = [
         ),
         "token_cost_hint": "low",
     },
+    {
+        "name": "check_upstream_health",
+        "summary": (
+            "Live Ensembl REST readiness per assembly (circuit-breaker snapshot "
+            "via /info/ping); use before a batch or when calls start failing to "
+            "see if a build is degraded and route to the healthy one."
+        ),
+        "token_cost_hint": "low",
+    },
 ]
 
 _ERROR_CODES = [
@@ -119,6 +128,7 @@ _RESOURCES = [
     "vep://reference",
     "vep://citations",
     "vep://research-use",
+    "vep://health",
 ]
 
 _NOTES = [

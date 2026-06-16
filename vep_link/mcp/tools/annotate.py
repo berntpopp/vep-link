@@ -31,6 +31,7 @@ from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta, provenance
 from vep_link.mcp.shaping import shape_annotation
 from vep_link.mcp.tools._common import (
+    ensure_upstream_available,
     new_request_id,
     spliceai_dbnsfp_note,
     validate_vep_options,
@@ -45,7 +46,12 @@ def _vep_region_endpoint(assembly: str) -> str:
     return f"{settings.vep_url(GenomeBuild(assembly))}/vep/homo_sapiens/region"
 
 
-def register_annotate_tools(mcp: FastMCP, *, service_factory: Callable[[], Any]) -> None:
+def register_annotate_tools(
+    mcp: FastMCP,
+    *,
+    service_factory: Callable[[], Any],
+    health_factory: Callable[[], Any] | None = None,
+) -> None:
     """Register ``annotate_variant`` and ``annotate_variants_batch`` on ``mcp``."""
 
     @mcp.tool(
@@ -95,8 +101,11 @@ def register_annotate_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
     ) -> dict[str, Any]:
         """Use this for the full VEP annotation of one variant: consequences, gene/transcript impact, HGVS, MANE/canonical flags, SIFT/PolyPhen/CADD, and gnomAD frequencies. Input is parsed, recoded if needed, sent to the VEP region endpoint, then shaped to response_mode (start compact; widen to standard/full only if needed). Carries a provenance block (endpoint + citation)."""
 
+        health = health_factory() if health_factory else None
+
         async def call() -> dict[str, Any]:
             validate_vep_options(vep_options)
+            ensure_upstream_available(health, assembly)
             service = service_factory()
             result = await service.annotate(variant, GenomeBuild(assembly), vep_options=vep_options)
             shaped = shape_annotation(result, response_mode)
@@ -119,7 +128,9 @@ def register_annotate_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
         return await run_mcp_tool(
             "annotate_variant",
             call,
-            McpErrorContext(tool_name="annotate_variant", variant=variant, assembly=assembly),
+            McpErrorContext(
+                tool_name="annotate_variant", variant=variant, assembly=assembly, health=health
+            ),
         )
 
     @mcp.tool(
@@ -160,8 +171,11 @@ def register_annotate_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
     ) -> dict[str, Any]:
         """Use this to annotate many variants (cap 200) in one call instead of looping annotate_variant. Returns a results list (each shaped to response_mode and tagged with its original input), a per-input errors list (parse/not-found failures that did not fail the batch), and a summary count. Identical canonical variants are de-duplicated into a single VEP request."""
 
+        health = health_factory() if health_factory else None
+
         async def call() -> dict[str, Any]:
             validate_vep_options(vep_options)
+            ensure_upstream_available(health, assembly)
             service = service_factory()
             batch = await service.annotate_batch(
                 variants, GenomeBuild(assembly), vep_options=vep_options
@@ -190,5 +204,5 @@ def register_annotate_tools(mcp: FastMCP, *, service_factory: Callable[[], Any])
         return await run_mcp_tool(
             "annotate_variants_batch",
             call,
-            McpErrorContext(tool_name="annotate_variants_batch", assembly=assembly),
+            McpErrorContext(tool_name="annotate_variants_batch", assembly=assembly, health=health),
         )

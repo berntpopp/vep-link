@@ -43,10 +43,10 @@ def structured(result: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def test_get_capabilities_returns_server_and_six_tools(facade) -> None:
+async def test_get_capabilities_returns_server_and_all_tools(facade) -> None:
     data = structured(await facade.call_tool("get_capabilities", {}))
     assert data["server"] == "vep-link"
-    assert len(data["tools"]) == 6
+    assert len(data["tools"]) == 7
     tool_names = {t["name"] for t in data["tools"]}
     assert tool_names == {
         "get_capabilities",
@@ -55,6 +55,7 @@ async def test_get_capabilities_returns_server_and_six_tools(facade) -> None:
         "annotate_variant",
         "annotate_variants_batch",
         "liftover_variant",
+        "check_upstream_health",
     }
     assert data["research_use_only"] is True
     # Every response carries a _meta block.
@@ -66,7 +67,7 @@ def test_capabilities_payload_matches_server_capabilities() -> None:
     # The tool body is a thin wrapper over server_capabilities() + _meta.
     caps = server_capabilities()
     assert caps["server"] == "vep-link"
-    assert len(caps["tools"]) == 6
+    assert len(caps["tools"]) == 7
 
 
 # ---------------------------------------------------------------------------
