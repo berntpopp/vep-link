@@ -78,7 +78,7 @@ test-unit: ## Run unit tests in parallel
 	uv run pytest tests/unit -q -n auto
 
 test-integration: ## Run live integration tests against Ensembl REST
-	uv run pytest tests/integration -q
+	VEP_LINK_RUN_INTEGRATION=1 uv run pytest tests/integration -q -m integration
 
 test-cov: ## Run unit tests with coverage
 	uv run pytest tests/unit --cov=vep_link --cov-branch --cov-report=term-missing --cov-report=html --cov-report=xml

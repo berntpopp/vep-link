@@ -31,8 +31,7 @@ _RSID_RE = re.compile(r"^rs\d+$", re.IGNORECASE)
 _ALLELE_RE = re.compile(r"^[ACGT]+$")
 # CNV: chr:start-end:TYPE (chr already stripped of a leading "chr").
 _CNV_RE = re.compile(
-    r"^(?P<chrom>[0-9XYM]+):(?P<start>\d+)-(?P<end>\d+):"
-    r"(?P<type>DEL|DUP|CNV|INS|INV|CUSTOM)$",
+    r"^(?P<chrom>[0-9XYM]+):(?P<start>\d+)-(?P<end>\d+):" r"(?P<type>DEL|DUP|CNV|INS|INV|CUSTOM)$",
     re.IGNORECASE,
 )
 _CHR_PREFIX_RE = re.compile(r"^chr", re.IGNORECASE)

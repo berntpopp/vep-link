@@ -18,8 +18,10 @@ import pytest
 from vep_link.config import Settings
 from vep_link.logging_config import configure_logging
 
-# Configure structlog once for the session (quiet console renderer).
-configure_logging("WARNING", "console")
+# Configure structlog once for the session. Use the JSON renderer (as in
+# production) so exception logging via ``format_exc_info`` does not emit the
+# ConsoleRenderer "pretty exceptions" warning during error-path tests.
+configure_logging("WARNING", "json")
 
 _REAL_SOCKET = socket.socket
 
