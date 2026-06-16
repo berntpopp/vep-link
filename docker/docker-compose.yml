@@ -1,0 +1,50 @@
+name: vep-link
+
+services:
+  vep-link:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+
+    container_name: vep_link_server
+
+    env_file:
+      - path: ../.env
+        required: false
+      - path: ../.env.docker
+        required: false
+
+    environment:
+      VEP_LINK_LOG_LEVEL: INFO
+      VEP_LINK_MCP_TRANSPORT: unified
+      VEP_LINK_MCP_HOST: 0.0.0.0
+      VEP_LINK_MCP_PORT: 8000
+      VEP_LINK_MCP_PATH: /mcp
+
+    ports:
+      - "${VEP_LINK_HOST_PORT:-8021}:8000"
+
+    command: ["vep-link", "serve", "--transport", "unified", "--host", "0.0.0.0", "--port", "8000"]
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+    restart: unless-stopped
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
