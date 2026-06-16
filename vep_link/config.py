@@ -109,10 +109,20 @@ class Settings(BaseSettings):
     DEFAULT_ASSEMBLY: Literal["GRCh38", "GRCh37"] = "GRCh38"
 
     # Request handling / resilience.
-    REQUEST_TIMEOUT: int = 60
+    #
+    # Defaults are tuned so a *synchronous* MCP tool call fails fast and cleanly
+    # when Ensembl is unhealthy (e.g. an upstream 500/hang) instead of stacking
+    # up retries past the client's tool-call timeout. ``CONNECT_TIMEOUT`` fails
+    # fast on connection-level stalls; ``REQUEST_TIMEOUT`` bounds a single
+    # attempt's read; ``OVERALL_DEADLINE_SECONDS`` is a hard wall-clock cap on
+    # one logical request *across all retries* (each attempt's timeout is capped
+    # to the remaining budget), so total time can never exceed it.
+    REQUEST_TIMEOUT: int = 30
+    CONNECT_TIMEOUT: float = 10.0
+    OVERALL_DEADLINE_SECONDS: float = 45.0
     MAX_CONCURRENCY: int = 5
     QUEUE_WAIT_TIMEOUT: int = 20
-    MAX_RETRIES: int = 4
+    MAX_RETRIES: int = 2
     BACKOFF_BASE_SECONDS: float = 1.0
     BACKOFF_MAX_SECONDS: float = 20.0
 

@@ -313,3 +313,34 @@ async def test_aclose_is_idempotent(client: BaseHTTPClient) -> None:
     await client.get_json(URL)
     await client.aclose()
     await client.aclose()  # second close must not raise
+
+
+@respx.mock
+async def test_overall_deadline_skips_retries(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the wall-clock budget spent, a retryable 500 fails on the first
+    attempt instead of stacking MAX_RETRIES full-length timeouts."""
+    route = respx.get(URL).mock(return_value=httpx.Response(500, json={"error": "down"}))
+    deadline_settings = settings.model_copy(update={"OVERALL_DEADLINE_SECONDS": 0.0})
+    c = BaseHTTPClient(deadline_settings)
+    monkeypatch.setattr(c, "_sleep", _noop_sleep)
+    try:
+        with pytest.raises(EnsemblApiError):
+            await c.get_json(URL)
+    finally:
+        await c.aclose()
+    # MAX_RETRIES=2 would normally mean 3 attempts; the spent budget caps it to 1.
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_connect_timeout_is_short(settings: Settings) -> None:
+    """The client is built with a short connect timeout (fast-fail on a stalled
+    handshake) distinct from the longer read timeout."""
+    c = BaseHTTPClient(settings)
+    try:
+        assert c._timeout.connect == settings.CONNECT_TIMEOUT
+        assert c._timeout.read == settings.REQUEST_TIMEOUT
+    finally:
+        await c.aclose()

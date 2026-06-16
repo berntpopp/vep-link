@@ -49,10 +49,21 @@ class BaseHTTPClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._timeout = httpx.Timeout(settings.REQUEST_TIMEOUT)
+        # Split timeout: a short connect timeout fails fast on a stalled TCP/TLS
+        # handshake, while the (longer) read timeout tolerates legitimately slow
+        # batch responses.
+        self._timeout = httpx.Timeout(settings.REQUEST_TIMEOUT, connect=settings.CONNECT_TIMEOUT)
         self._semaphore = asyncio.Semaphore(max(1, settings.MAX_CONCURRENCY))
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+
+    def _attempt_timeout(self, remaining: float) -> httpx.Timeout:
+        """Per-attempt timeout, capped to the remaining overall-deadline budget."""
+        budget = max(0.5, remaining)
+        return httpx.Timeout(
+            min(float(self._settings.REQUEST_TIMEOUT), budget),
+            connect=min(float(self._settings.CONNECT_TIMEOUT), budget),
+        )
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -113,8 +124,8 @@ class BaseHTTPClient:
     ) -> Any:
         """GET ``url`` with ``params``, returning parsed JSON (dict or list)."""
 
-        async def _send(client: httpx.AsyncClient) -> httpx.Response:
-            return await client.get(url, params=params, headers=headers)
+        async def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> httpx.Response:
+            return await client.get(url, params=params, headers=headers, timeout=timeout)
 
         return await self._request(url, _send)
 
@@ -129,8 +140,10 @@ class BaseHTTPClient:
         """POST ``json_body`` as JSON to ``url``, returning parsed JSON."""
         merged = {"Content-Type": "application/json", **(headers or {})}
 
-        async def _send(client: httpx.AsyncClient) -> httpx.Response:
-            return await client.post(url, json=json_body, params=params, headers=merged)
+        async def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> httpx.Response:
+            return await client.post(
+                url, json=json_body, params=params, headers=merged, timeout=timeout
+            )
 
         return await self._request(url, _send)
 
@@ -141,18 +154,36 @@ class BaseHTTPClient:
         url: str,
         send: Any,
     ) -> Any:
-        """Run ``send`` through the bounded-concurrency, jittered-retry loop."""
+        """Run ``send`` through the bounded-concurrency, jittered-retry loop.
+
+        A hard wall-clock budget (``OVERALL_DEADLINE_SECONDS``) caps the total
+        time across all attempts: each attempt's timeout is shrunk to the
+        remaining budget, and once the budget is spent no further attempt is
+        started. This guarantees an unhealthy upstream (a 500-storm or a hung
+        connection) surfaces a clean ``upstream_unavailable`` quickly instead of
+        stacking ``MAX_RETRIES`` full-length timeouts past the caller's deadline.
+        """
         client = await self._ensure_client()
         loop = asyncio.get_running_loop()
-        queue_deadline = loop.time() + self._settings.QUEUE_WAIT_TIMEOUT
+        op_deadline = loop.time() + self._settings.OVERALL_DEADLINE_SECONDS
         max_retries = self._settings.MAX_RETRIES
         last_exc: BaseException | None = None
 
         for attempt in range(max_retries + 1):
-            await self._acquire_slot(timeout=queue_deadline - loop.time())
+            remaining = op_deadline - loop.time()
+            # No retries left, or the wall-clock budget is spent: this is the
+            # final attempt and any fault must propagate.
+            is_last = attempt >= max_retries or remaining <= 0
+            if attempt > 0 and remaining <= 0:
+                _raise_terminal(last_exc, url)
+            # Wait for a concurrency slot with a fresh per-attempt budget
+            # (backpressure is independent of the read/deadline budget). Using an
+            # absolute deadline here would make a retry after a slow first attempt
+            # spuriously report saturation.
+            await self._acquire_slot(timeout=float(self._settings.QUEUE_WAIT_TIMEOUT))
             retry_after: float | None = None
             try:
-                response = await send(client)
+                response = await send(client, self._attempt_timeout(remaining))
                 status = response.status_code
                 if status >= 400:
                     response.raise_for_status()
@@ -165,7 +196,7 @@ class BaseHTTPClient:
                 if status not in _RETRYABLE_STATUS:
                     # Non-retryable 4xx (e.g. 401/403): deterministic input error.
                     raise UpstreamInputError(_extract_error_message(exc.response, status)) from exc
-                if attempt >= max_retries:
+                if is_last:
                     if status == 429:
                         raise RateLimitedError(
                             f"Rate limited by upstream (HTTP 429) after retries: {url}"
@@ -175,11 +206,11 @@ class BaseHTTPClient:
                     retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                if attempt >= max_retries:
+                if is_last:
                     raise UpstreamTimeoutError(f"Upstream request timed out: {url}") from exc
             except httpx.TransportError as exc:
                 last_exc = exc
-                if attempt >= max_retries:
+                if is_last:
                     raise EnsemblApiError(f"Upstream request failed: {exc!s}") from exc
             finally:
                 self._semaphore.release()
@@ -200,6 +231,25 @@ class BaseHTTPClient:
         if retry_after is not None:
             wait = max(wait, retry_after)
         await self._sleep(wait)
+
+
+def _raise_terminal(last_exc: BaseException | None, url: str) -> None:
+    """Raise the right vep-link error when the overall deadline is exhausted.
+
+    Maps the most recent caught fault onto the exception taxonomy so the MCP
+    layer classifies the budget-exhausted outcome the same as a normal
+    retries-exhausted outcome.
+    """
+    if isinstance(last_exc, httpx.TimeoutException):
+        raise UpstreamTimeoutError(f"Upstream deadline exceeded (timeout): {url}") from last_exc
+    if isinstance(last_exc, httpx.HTTPStatusError):
+        status = last_exc.response.status_code
+        if status == 429:
+            raise RateLimitedError(
+                f"Rate limited by upstream (HTTP 429), deadline exceeded: {url}"
+            ) from last_exc
+        raise EnsemblApiError(f"Upstream HTTP {status}, deadline exceeded: {url}") from last_exc
+    raise EnsemblApiError(f"Upstream unavailable, deadline exceeded: {url}") from last_exc
 
 
 def _parse_retry_after(value: str | None) -> float | None:

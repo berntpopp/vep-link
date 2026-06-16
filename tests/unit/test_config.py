@@ -19,7 +19,10 @@ def test_defaults() -> None:
     assert s.DEFAULT_ASSEMBLY == "GRCh38"
     assert s.CHUNK_SIZE == 200
     assert s.BATCH_MAX == 200
-    assert s.MAX_RETRIES == 4
+    assert s.MAX_RETRIES == 2
+    assert s.REQUEST_TIMEOUT == 30
+    assert s.CONNECT_TIMEOUT == 10.0
+    assert s.OVERALL_DEADLINE_SECONDS == 45.0
     assert s.MCP_PATH == "/mcp"
 
 

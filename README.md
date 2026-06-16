@@ -127,10 +127,12 @@ All settings use the `VEP_LINK_` env prefix (and an optional `.env`; copy
 | `VEP_LINK_VEP_GRCH38_URL` | `https://rest.ensembl.org` | GRCh38 Ensembl REST host. |
 | `VEP_LINK_VEP_GRCH37_URL` | `https://grch37.rest.ensembl.org` | GRCh37 Ensembl REST host. |
 | `VEP_LINK_DEFAULT_ASSEMBLY` | `GRCh38` | Default assembly. |
-| `VEP_LINK_REQUEST_TIMEOUT` | `60` | Upstream request timeout (s). |
+| `VEP_LINK_REQUEST_TIMEOUT` | `30` | Per-attempt upstream read timeout (s). |
+| `VEP_LINK_CONNECT_TIMEOUT` | `10.0` | Connection (TCP/TLS) timeout (s) — fast-fail on a stalled handshake. |
+| `VEP_LINK_OVERALL_DEADLINE_SECONDS` | `45.0` | Hard wall-clock cap on one request across all retries. |
 | `VEP_LINK_MAX_CONCURRENCY` | `5` | Concurrent upstream request cap. |
 | `VEP_LINK_QUEUE_WAIT_TIMEOUT` | `20` | Max wait (s) for a concurrency slot before backpressure. |
-| `VEP_LINK_MAX_RETRIES` | `4` | Retry attempts on retryable failures. |
+| `VEP_LINK_MAX_RETRIES` | `2` | Retry attempts on retryable failures. |
 | `VEP_LINK_BACKOFF_BASE_SECONDS` | `1.0` | Backoff base. |
 | `VEP_LINK_BACKOFF_MAX_SECONDS` | `20.0` | Backoff ceiling. |
 | `VEP_LINK_CHUNK_SIZE` | `200` | Variants per upstream POST chunk. |

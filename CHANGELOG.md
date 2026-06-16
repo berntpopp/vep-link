@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fail fast and cleanly when Ensembl REST is unhealthy. Previously a hung or
+  500-storming upstream (e.g. a `rest.ensembl.org` GRCh38 outage) made a tool
+  call stack `MAX_RETRIES` full-length timeouts (minutes) and the MCP client
+  would time out with no useful error. The HTTP client now uses a short connect
+  timeout, a hard wall-clock `OVERALL_DEADLINE_SECONDS` (default 45 s) across all
+  retries, and tuned defaults (`REQUEST_TIMEOUT` 60→30, `MAX_RETRIES` 4→2), so an
+  outage surfaces a clean `upstream_unavailable`/`upstream_timeout` in seconds.
+- Fix a spurious `rate_limited` ("concurrency saturated") error on a retry that
+  followed a slow first attempt: the concurrency-slot wait now uses a fresh
+  per-attempt budget instead of a stale absolute deadline.
+
 ## [0.1.0] - 2026-06-16
 
 ### Added
