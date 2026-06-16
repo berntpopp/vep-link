@@ -24,10 +24,17 @@ VEP_HGVS_PATH = "/vep/human/hgvs"
 VEP_ID_PATH = "/vep/human/id"
 ASSEMBLY_MAP_PATH = "/map/human"
 
-# VEP query profile applied by default (variant-linker's proven set + a little
-# more). Values of "1" enable the flag per Ensembl REST convention.
+# VEP query profile applied by default (variant-linker's proven set + the
+# precomputed pathogenicity/conservation predictors that the public Ensembl REST
+# *does* serve as dedicated toggles). Values of "1" enable the flag per Ensembl
+# REST convention. CADD/REVEL/AlphaMissense are the headline missense
+# pathogenicity scores; Conservation is the GERP score. They only populate for
+# applicable (e.g. missense/coding) variants, so they cost nothing on others.
 DEFAULT_VEP_OPTIONS: dict[str, str] = {
     "CADD": "1",
+    "REVEL": "1",
+    "AlphaMissense": "1",
+    "Conservation": "1",
     "hgvs": "1",
     "mane": "1",
     "numbers": "1",
@@ -35,15 +42,22 @@ DEFAULT_VEP_OPTIONS: dict[str, str] = {
     "domains": "1",
 }
 
-# Caller-supplied VEP flags are validated against this allowlist. Plugins that
-# are not available on the public Ensembl REST (e.g. SpliceAI, dbNSFP) are listed
-# so they can be requested against an instance that supports them, but are
-# surfaced in a note rather than silently dropped when unsupported.
+# Caller-supplied VEP flags are validated against this allowlist. Two classes:
+#   1. Toggles the public Ensembl REST genuinely serves -- transcript/identifier
+#      annotation plus the precomputed predictor scores (CADD, REVEL,
+#      AlphaMissense, Conservation, EVE, dbscSNV, MaxEntScan, GeneSplicer,
+#      Blosum62). These return data directly.
+#   2. Instance-dependent plugins not run by the public REST (SpliceAI, dbNSFP,
+#      LoF). They stay allowlisted so they can be requested against a configured
+#      VEP instance, but are surfaced in a note rather than silently dropped (see
+#      ``vep_link.mcp.tools._common._INSTANCE_DEPENDENT_PLUGINS``).
 VEP_OPTION_ALLOWLIST: frozenset[str] = frozenset(
     {
-        "CADD",
+        # transcript / identifier annotation
         "hgvs",
+        "hgvsg",
         "mane",
+        "mane_select",
         "numbers",
         "canonical",
         "domains",
@@ -57,17 +71,33 @@ VEP_OPTION_ALLOWLIST: frozenset[str] = frozenset(
         "biotype",
         "symbol",
         "xref_refseq",
+        "transcript_version",
         "variant_class",
+        "var_synonyms",
+        "mirna",
+        "gene_phenotype",
         "regulatory",
+        "shift_3prime",
         "pick",
         "pick_allele",
         "per_gene",
         "flag_pick",
         "minimal",
         "vcf_string",
+        # precomputed predictor scores served by the public REST
+        "CADD",
+        "REVEL",
+        "AlphaMissense",
+        "Conservation",
+        "Blosum62",
+        "EVE",
+        "dbscSNV",
+        "MaxEntScan",
+        "GeneSplicer",
+        "Phenotypes",
+        # instance-dependent plugins (not run by the public REST)
         "SpliceAI",
         "dbNSFP",
-        "Conservation",
         "LoF",
     }
 )

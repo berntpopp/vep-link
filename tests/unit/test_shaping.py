@@ -35,6 +35,10 @@ _REP_KEYS = {
     "sift_prediction",
     "polyphen_prediction",
     "cadd_phred",
+    "revel",
+    "am_pathogenicity",
+    "am_class",
+    "conservation",
 }
 
 
@@ -133,6 +137,16 @@ def test_compact_representative_transcript() -> None:
     assert rep["gene_symbol"] == "GENE1"
     assert rep["cadd_phred"] == 25.1
     assert rep["transcript_id"] == "ENST00000123456"
+
+
+def test_compact_representative_carries_pathogenicity_scores() -> None:
+    # The default (compact) mode must already expose the headline predictors so
+    # an interpreter does not have to widen to standard/full to see them.
+    rep = shape_annotation(DATA, ResponseMode.COMPACT)["representative_transcript"]
+    assert rep["revel"] == 0.84
+    assert rep["am_pathogenicity"] == 0.92
+    assert rep["am_class"] == "pathogenic"
+    assert rep["conservation"] == 5.6
 
 
 def test_compact_includes_position_and_frequencies() -> None:

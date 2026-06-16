@@ -53,6 +53,18 @@ def test_flatten_consequences_row0_fields() -> None:
     assert row["mane"] == ["MANE_Select"]
 
 
+def test_flatten_consequences_row0_scoring_fields() -> None:
+    # Precomputed predictor / conservation scores served by the public REST.
+    row = flatten_consequences(MISSENSE)[0]
+    assert row["cadd_phred"] == 25.1
+    assert row["cadd_raw"] == 3.214
+    assert row["revel"] == 0.84
+    assert row["conservation"] == 5.6
+    # AlphaMissense's nested object is flattened to two scalar columns.
+    assert row["am_pathogenicity"] == 0.92
+    assert row["am_class"] == "pathogenic"
+
+
 def test_flatten_consequences_row1_missing_fields_default_none() -> None:
     rows = flatten_consequences(MISSENSE)
     row = rows[1]
@@ -62,6 +74,26 @@ def test_flatten_consequences_row1_missing_fields_default_none() -> None:
     assert row["hgvsp"] is None
     assert row["sift_score"] is None
     assert row["protein_position"] is None
+    # Scoring fields absent on this transcript -> present and None.
+    assert row["revel"] is None
+    assert row["cadd_raw"] is None
+    assert row["conservation"] is None
+    assert row["am_pathogenicity"] is None
+    assert row["am_class"] is None
+
+
+def test_flatten_consequences_alphamissense_non_dict_is_none() -> None:
+    # A malformed / absent alphamissense field must not raise.
+    record = {
+        "transcript_consequences": [
+            {"transcript_id": "ENST1", "alphamissense": "unexpected"},
+            {"transcript_id": "ENST2"},
+        ]
+    }
+    rows = flatten_consequences(record)
+    assert rows[0]["am_pathogenicity"] is None
+    assert rows[0]["am_class"] is None
+    assert rows[1]["am_pathogenicity"] is None
 
 
 def test_flatten_consequences_intergenic_is_empty() -> None:

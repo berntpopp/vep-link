@@ -24,6 +24,10 @@ __all__ = [
 ]
 
 # Transcript-consequence fields copied verbatim into each flattened row.
+# The trailing block is the precomputed predictor / conservation scores the
+# public Ensembl REST returns for the dedicated VEP toggles (see
+# ``DEFAULT_VEP_OPTIONS``). AlphaMissense arrives as a nested object and is
+# flattened separately (see :func:`_extract_alphamissense`).
 _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "gene_id",
     "gene_symbol",
@@ -42,7 +46,25 @@ _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "polyphen_score",
     "polyphen_prediction",
     "cadd_phred",
+    "cadd_raw",
+    "revel",
+    "conservation",
 )
+
+
+def _extract_alphamissense(consequence: dict[str, Any]) -> tuple[float | None, str | None]:
+    """Flatten VEP's nested ``alphamissense`` object to ``(pathogenicity, class)``.
+
+    The ``AlphaMissense=1`` toggle returns ``{"am_pathogenicity": float,
+    "am_class": str}`` (class is ``benign`` / ``pathogenic`` / ``ambiguous``).
+    Returns ``(None, None)`` when the field is absent or not a mapping, so the
+    flattened row keeps a stable two-column shape mirroring SIFT/PolyPhen.
+    """
+    am = consequence.get("alphamissense")
+    if not isinstance(am, dict):
+        return None, None
+    pathogenicity = am.get("am_pathogenicity")
+    return pathogenicity, am.get("am_class")
 
 
 def _format_protein_position(consequence: dict[str, Any]) -> str | None:
@@ -79,6 +101,7 @@ def flatten_consequences(vep_record: dict[str, Any]) -> list[dict[str, Any]]:
     for consequence in consequences:
         row: dict[str, Any] = {field: consequence.get(field) for field in _PASSTHROUGH_FIELDS}
         row["protein_position"] = _format_protein_position(consequence)
+        row["am_pathogenicity"], row["am_class"] = _extract_alphamissense(consequence)
         rows.append(row)
     return rows
 

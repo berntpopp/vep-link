@@ -73,8 +73,8 @@ every `_meta` and skips re-fetching when unchanged.
     "ambiguous", "rate_limited", "upstream_unavailable", "upstream_timeout",
     "output_validation_failed", "internal_error"
   ],
-  "vep_default_options": {"CADD": "1", "hgvs": "1", "mane": "1", "numbers": "1", "canonical": "1", "domains": "1"},
-  "vep_option_allowlist": ["CADD", "Conservation", "LoF", "SpliceAI", "..."],
+  "vep_default_options": {"CADD": "1", "REVEL": "1", "AlphaMissense": "1", "Conservation": "1", "hgvs": "1", "mane": "1", "numbers": "1", "canonical": "1", "domains": "1"},
+  "vep_option_allowlist": ["AlphaMissense", "CADD", "Conservation", "EVE", "REVEL", "SpliceAI", "dbNSFP", "..."],
   "batch_max": 200,
   "citation": {
     "vep": "McLaren W, et al. The Ensembl Variant Effect Predictor. Genome Biol. 2016;17:122. PMID:27268795.",
@@ -187,9 +187,10 @@ arrays into flat, de-duplicated lists:
 ## `annotate_variant`
 
 **Purpose.** Full VEP annotation for one variant: consequences, gene/transcript
-impact, HGVS, MANE/canonical flags, SIFT/PolyPhen/CADD, and gnomAD frequencies.
-The input is parsed, recoded if needed, sent to the VEP region endpoint, then
-shaped to `response_mode`. Carries a `provenance` block.
+impact, HGVS, MANE/canonical flags, the precomputed pathogenicity / conservation
+predictors (SIFT, PolyPhen, **CADD**, **REVEL**, **AlphaMissense**, **GERP**), and
+gnomAD frequencies. The input is parsed, recoded if needed, sent to the VEP region
+endpoint, then shaped to `response_mode`. Carries a `provenance` block.
 
 **Arguments.**
 
@@ -207,19 +208,50 @@ flag per Ensembl REST convention). Disallowed keys raise `invalid_input` listing
 the bad keys.
 
 ```
-CADD, hgvs, mane, numbers, canonical, domains, merged, refseq, protein, uniprot,
-ccds, tsl, appris, biotype, symbol, xref_refseq, variant_class, regulatory, pick,
-pick_allele, per_gene, flag_pick, minimal, vcf_string, SpliceAI, dbNSFP,
-Conservation, LoF
+# transcript / identifier annotation
+hgvs, hgvsg, mane, mane_select, numbers, canonical, domains, merged, refseq,
+protein, uniprot, ccds, tsl, appris, biotype, symbol, xref_refseq,
+transcript_version, variant_class, var_synonyms, mirna, gene_phenotype,
+regulatory, shift_3prime, pick, pick_allele, per_gene, flag_pick, minimal,
+vcf_string
+# precomputed predictor scores served by the public REST
+CADD, REVEL, AlphaMissense, Conservation, Blosum62, EVE, dbscSNV, MaxEntScan,
+GeneSplicer, Phenotypes
+# instance-dependent plugins (not run by the public REST)
+SpliceAI, dbNSFP, LoF
 ```
 
 The default profile applied to every call is
-`CADD=1, hgvs=1, mane=1, numbers=1, canonical=1, domains=1`.
+`CADD=1, REVEL=1, AlphaMissense=1, Conservation=1, hgvs=1, mane=1, numbers=1, canonical=1, domains=1`.
+
+### Pathogenicity & conservation scores
+
+The public Ensembl REST serves several precomputed predictors as dedicated
+toggles, and vep-link enables the headline ones **by default** so a plain
+`annotate_variant` call already carries them on the relevant transcript (they
+populate only for applicable variants, e.g. missense/coding):
+
+| Field(s) | Toggle | Meaning |
+|----------|--------|---------|
+| `cadd_phred`, `cadd_raw` | `CADD` | CADD deleteriousness (PHRED-scaled + raw). |
+| `revel` | `REVEL` | REVEL missense pathogenicity ensemble score (0–1). |
+| `am_pathogenicity`, `am_class` | `AlphaMissense` | AlphaMissense score (0–1) + class (`benign`/`pathogenic`/`ambiguous`). |
+| `conservation` | `Conservation` | GERP conservation score. |
+| `sift_score`, `sift_prediction` | (default) | SIFT. |
+| `polyphen_score`, `polyphen_prediction` | (default) | PolyPhen. |
+
+`revel`, `am_pathogenicity`, `am_class`, and `conservation` (plus `cadd_phred`)
+appear in the `compact` `representative_transcript` and in every `standard`
+transcript; `cadd_raw` and the `*_score` predictor values appear in `full`. Other
+allowlisted toggles (e.g. `EVE`, `dbscSNV`, `MaxEntScan`) can be requested via
+`vep_options` and are returned under their native VEP keys in `full`.
 
 > **Instance-dependent plugins.** `SpliceAI`, `dbNSFP`, and `LoF` are allowlisted
 > (so they can be sent to a VEP instance configured with them) but are **not run
-> by the public Ensembl REST API**. Requesting one returns the annotation plus a
-> `note` field rather than silently dropping the flag:
+> by the public Ensembl REST API**. The scores commonly pulled *from* dbNSFP
+> (REVEL, CADD, SIFT, PolyPhen, AlphaMissense) are available via the dedicated
+> toggles above. Requesting an instance-dependent plugin returns the annotation
+> plus a `note` field rather than silently dropping the flag:
 >
 > ```json
 > "note": "VEP plugin(s) ['SpliceAI'] are instance-dependent and are not run by the public Ensembl REST API; results for these fields are only populated against a VEP instance configured with the plugin."
@@ -282,7 +314,11 @@ Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE 
     "protein_position": "534",
     "sift_prediction": "deleterious",
     "polyphen_prediction": "probably_damaging",
-    "cadd_phred": 23.1
+    "cadd_phred": 23.1,
+    "revel": 0.81,
+    "am_pathogenicity": 0.74,
+    "am_class": "pathogenic",
+    "conservation": 5.1
   },
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "provenance": {"...": "..."},
@@ -302,7 +338,7 @@ the compact key set) plus `frequencies`.
   "gene_symbol": "F5",
   "seq_region_name": "1", "start": 169549811, "end": 169549811, "allele_string": "T/C",
   "transcript_consequences": [
-    {"gene_symbol": "F5", "transcript_id": "ENST00000367797", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "hgvsc": "...", "hgvsp": "...", "protein_position": "534", "sift_prediction": "deleterious", "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1}
+    {"gene_symbol": "F5", "transcript_id": "ENST00000367797", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "hgvsc": "...", "hgvsp": "...", "protein_position": "534", "sift_prediction": "deleterious", "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1, "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic", "conservation": 5.1}
   ],
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "provenance": {"...": "..."},
@@ -312,14 +348,15 @@ the compact key set) plus `frequencies`.
 
 **`full`** — the entire normalized annotation, including `strand`, the full
 `transcript_consequences` (with `gene_id`, `biotype`, `amino_acids`, `codons`,
-`sift_score`, `polyphen_score`, etc.), and the raw `colocated_variants` array.
+`sift_score`, `polyphen_score`, `cadd_raw`, `revel`, `am_pathogenicity`,
+`am_class`, `conservation`, etc.), and the raw `colocated_variants` array.
 
 ```json
 {
   "variant_id": "1-169549811-T-C", "assembly": "GRCh38", "input": "1 169549811 . T C . . .",
   "seq_region_name": "1", "start": 169549811, "end": 169549811, "allele_string": "T/C", "strand": 1,
   "most_severe_consequence": "missense_variant", "gene_symbol": "F5",
-  "transcript_consequences": [{"gene_id": "ENSG00000198734", "gene_symbol": "F5", "transcript_id": "ENST00000367797", "biotype": "protein_coding", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "canonical": 1, "mane": ["MANE_Select"], "hgvsc": "...", "hgvsp": "...", "amino_acids": "R/Q", "codons": "cGg/cAg", "sift_score": 0.01, "sift_prediction": "deleterious", "polyphen_score": 0.98, "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1, "protein_position": "534"}],
+  "transcript_consequences": [{"gene_id": "ENSG00000198734", "gene_symbol": "F5", "transcript_id": "ENST00000367797", "biotype": "protein_coding", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "canonical": 1, "mane": ["MANE_Select"], "hgvsc": "...", "hgvsp": "...", "amino_acids": "R/Q", "codons": "cGg/cAg", "sift_score": 0.01, "sift_prediction": "deleterious", "polyphen_score": 0.98, "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1, "cadd_raw": 4.02, "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic", "conservation": 5.1, "protein_position": "534"}],
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "colocated_variants": [{"id": "rs6025", "frequencies": {"C": {"gnomade": 0.012, "gnomadg": 0.014}}}],
   "provenance": {"...": "..."},

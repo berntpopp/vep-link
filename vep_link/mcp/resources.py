@@ -134,9 +134,18 @@ _RESOURCES = [
 _NOTES = [
     RESEARCH_USE_NOTICE,
     (
-        "VEP plugins such as SpliceAI and dbNSFP are not available on the public "
+        "Precomputed pathogenicity / conservation scores ARE served by the public "
+        "Ensembl REST as dedicated toggles and are enabled by default: CADD "
+        "(cadd_phred/cadd_raw), REVEL (revel), AlphaMissense (am_pathogenicity/"
+        "am_class), Conservation (GERP), plus SIFT and PolyPhen. They populate "
+        "only for applicable (e.g. missense/coding) variants."
+    ),
+    (
+        "VEP plugins such as SpliceAI and dbNSFP are not run by the public "
         "Ensembl REST API; they are instance-dependent and surfaced in a note "
-        "rather than silently dropped when an instance does not support them."
+        "rather than silently dropped when an instance does not support them. "
+        "The scores people usually want from dbNSFP (REVEL, CADD, SIFT, PolyPhen, "
+        "AlphaMissense) are available via the dedicated toggles above."
     ),
     (
         "GRCh38 is served from rest.ensembl.org and GRCh37 from "

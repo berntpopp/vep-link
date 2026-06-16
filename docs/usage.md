@@ -114,25 +114,34 @@ Coordinate and CNV inputs skip the recoder and can be annotated directly:
 Start `compact` and widen only if needed:
 
 - `minimal` — identity only (`variant_id`, `most_severe_consequence`, `gene_symbol`).
-- `compact` (default) — adds position + one prioritized `representative_transcript` + gnomAD frequencies.
-- `standard` — all transcript consequences (compact key set each).
-- `full` — entire normalized annotation, including colocated variants.
+- `compact` (default) — adds position + one prioritized `representative_transcript`
+  (with the headline pathogenicity scores `cadd_phred`, `revel`,
+  `am_pathogenicity`/`am_class`, `conservation`) + gnomAD frequencies.
+- `standard` — all transcript consequences (compact key set each, scores included).
+- `full` — entire normalized annotation, including `cadd_raw`, the `*_score`
+  predictor values, and colocated variants.
 
 See [mcp-tools.md](mcp-tools.md) for an example payload of each tier.
 
 ### Extra VEP flags
 
 `annotate_variant` and `annotate_variants_batch` accept `vep_options` (an
-allowlisted flag map). Disallowed keys return `invalid_input`.
+allowlisted flag map). Disallowed keys return `invalid_input`. The default profile
+already enables the headline predictors (`CADD`, `REVEL`, `AlphaMissense`,
+`Conservation`) plus `hgvs`/`mane`/`numbers`/`canonical`/`domains`, so you only
+need `vep_options` to add others (e.g. `EVE`, `dbscSNV`, `MaxEntScan`, `refseq`)
+or to turn a default off (e.g. `{"REVEL": "0"}`).
 
 ```json
-{"name": "annotate_variant", "arguments": {"variant": "1-169549811-T-C", "vep_options": {"refseq": "1", "tsl": "1"}}}
+{"name": "annotate_variant", "arguments": {"variant": "1-169549811-T-C", "vep_options": {"EVE": "1", "dbscSNV": "1"}}}
 ```
 
 `SpliceAI`, `dbNSFP`, and `LoF` are allowlisted but **not run by the public
 Ensembl REST API**. Requesting one returns the annotation plus an explanatory
 `note` field rather than silently dropping the flag (it only populates against a
-VEP instance configured with the plugin).
+VEP instance configured with the plugin). The scores typically pulled *from*
+dbNSFP — REVEL, CADD, SIFT, PolyPhen, AlphaMissense — are available via the
+dedicated toggles above.
 
 ## Workflow 2 — batch annotate (≤200, internal chunking)
 

@@ -8,6 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pathogenicity & conservation scores (REVEL, AlphaMissense, CADD, GERP).** The
+  public Ensembl REST serves these precomputed predictors as dedicated VEP
+  toggles; vep-link now enables `REVEL`, `AlphaMissense`, and `Conservation`
+  alongside the existing `CADD` **by default**, extracts them onto each
+  transcript (`revel`, `cadd_raw`, `conservation`, and the flattened
+  `am_pathogenicity` / `am_class`), and surfaces `revel` / `am_pathogenicity` /
+  `am_class` / `conservation` in the default `compact` `representative_transcript`
+  (and every `standard` transcript) so an interpreter sees them with no extra
+  round trip. The `vep_options` allowlist gained the public scoring/annotation
+  toggles (`REVEL`, `AlphaMissense`, `EVE`, `dbscSNV`, `MaxEntScan`, `GeneSplicer`,
+  `Blosum62`, `mane_select`, `hgvsg`, `var_synonyms`, `transcript_version`,
+  `mirna`, `gene_phenotype`, `shift_3prime`, `Phenotypes`). `dbNSFP`, `SpliceAI`,
+  and `LoF` remain allowlisted but instance-dependent (not run by the public
+  REST); the scores usually pulled *from* dbNSFP are available via the dedicated
+  toggles instead.
 - **Upstream health awareness.** A per-assembly circuit breaker (`UpstreamHealth`)
   tracks the two Ensembl REST hosts, fed both passively (real tool-call outcomes)
   and actively (a cheap `/info/ping` background probe every

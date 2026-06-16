@@ -62,3 +62,21 @@ def test_default_vep_options_and_allowlist() -> None:
     assert "hgvs" in DEFAULT_VEP_OPTIONS
     # Every default option must be allowlisted.
     assert set(DEFAULT_VEP_OPTIONS).issubset(VEP_OPTION_ALLOWLIST)
+
+
+def test_default_vep_options_include_pathogenicity_scores() -> None:
+    # The precomputed predictor toggles the public Ensembl REST serves are on by
+    # default so a plain annotate call already carries pathogenicity scores.
+    for flag in ("CADD", "REVEL", "AlphaMissense", "Conservation"):
+        assert DEFAULT_VEP_OPTIONS[flag] == "1"
+
+
+def test_allowlist_includes_public_predictor_toggles() -> None:
+    # Newly surfaced, callable scoring/annotation toggles.
+    for flag in ("REVEL", "AlphaMissense", "EVE", "dbscSNV", "MaxEntScan", "mane_select"):
+        assert flag in VEP_OPTION_ALLOWLIST
+    # Instance-dependent plugins stay allowlisted (requestable against a
+    # configured instance) but are not defaults.
+    for flag in ("SpliceAI", "dbNSFP", "LoF"):
+        assert flag in VEP_OPTION_ALLOWLIST
+        assert flag not in DEFAULT_VEP_OPTIONS

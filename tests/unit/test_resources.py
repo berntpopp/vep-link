@@ -255,6 +255,19 @@ def test_server_capabilities_notes_mention_plugins() -> None:
     assert "instance" in blob
 
 
+def test_server_capabilities_notes_mention_public_scores() -> None:
+    # The precomputed predictor scores served by the public REST are documented.
+    blob = " ".join(server_capabilities()["notes"]).lower()
+    assert "revel" in blob
+    assert "alphamissense" in blob
+
+
+def test_server_capabilities_default_options_include_predictors() -> None:
+    caps = server_capabilities()
+    for flag in ("CADD", "REVEL", "AlphaMissense", "Conservation"):
+        assert caps["vep_default_options"][flag] == "1"
+
+
 # --------------------------------------------------------------------------- #
 # CAPABILITIES_VERSION
 # --------------------------------------------------------------------------- #

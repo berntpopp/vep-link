@@ -78,6 +78,10 @@ VEP_REGION_MISSENSE: list[dict[str, Any]] = [
                 "polyphen_score": 0.95,
                 "polyphen_prediction": "probably_damaging",
                 "cadd_phred": 25.1,
+                "cadd_raw": 3.214,
+                "revel": 0.84,
+                "conservation": 5.6,
+                "alphamissense": {"am_pathogenicity": 0.92, "am_class": "pathogenic"},
             },
             {
                 "gene_id": "ENSG00000123456",

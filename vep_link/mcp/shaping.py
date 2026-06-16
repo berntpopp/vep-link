@@ -46,7 +46,10 @@ _POSITION_FIELDS: tuple[str, ...] = (
     "allele_string",
 )
 
-# Keys retained when projecting a single transcript consequence.
+# Keys retained when projecting a single transcript consequence. The trailing
+# block is the headline pathogenicity / conservation signals (SIFT, PolyPhen,
+# CADD, REVEL, AlphaMissense, GERP) so the default compact mode already carries
+# the predictor scores an interpreter needs, without widening to standard/full.
 _TRANSCRIPT_FIELDS: tuple[str, ...] = (
     "gene_symbol",
     "transcript_id",
@@ -58,6 +61,10 @@ _TRANSCRIPT_FIELDS: tuple[str, ...] = (
     "sift_prediction",
     "polyphen_prediction",
     "cadd_phred",
+    "revel",
+    "am_pathogenicity",
+    "am_class",
+    "conservation",
 )
 
 

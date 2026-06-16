@@ -34,7 +34,15 @@ class TranscriptConsequence(BaseModel):
     sift_prediction: str | None = None
     polyphen_score: float | None = None
     polyphen_prediction: str | None = None
+    # Precomputed predictor / conservation scores (dedicated VEP toggles served
+    # by the public Ensembl REST). AlphaMissense's nested object is flattened to
+    # am_pathogenicity + am_class during extraction.
     cadd_phred: float | None = None
+    cadd_raw: float | None = None
+    revel: float | None = None
+    am_pathogenicity: float | None = None
+    am_class: str | None = None
+    conservation: float | None = None
 
 
 class GnomadFrequency(BaseModel):

@@ -161,6 +161,20 @@ def test_transcript_consequence_full_roundtrip() -> None:
     assert dumped["consequence_terms"] == ["missense_variant"]
     assert dumped["sift_score"] == 0.02
     assert dumped["canonical"] == 1
+    # Scalar predictor scores from the raw record round-trip directly; the nested
+    # raw `alphamissense` object is ignored (flat am_* fields are filled by
+    # extraction, not the raw model).
+    assert dumped["cadd_raw"] == 3.214
+    assert dumped["revel"] == 0.84
+    assert dumped["conservation"] == 5.6
+    assert dumped["am_pathogenicity"] is None
+
+
+def test_transcript_consequence_accepts_flattened_alphamissense() -> None:
+    tc = TranscriptConsequence(am_pathogenicity=0.92, am_class="pathogenic")
+    dumped = tc.model_dump()
+    assert dumped["am_pathogenicity"] == 0.92
+    assert dumped["am_class"] == "pathogenic"
 
 
 def test_gnomad_frequency_roundtrip() -> None:

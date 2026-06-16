@@ -23,9 +23,22 @@ recoder; rsID / HGVS / SPDI inputs go through Variant Recoder first to obtain a
 input ─► parse (coordinate | CNV | HGVS | rsID | SPDI)
           ├─ coordinate / CNV ──────────────► VEP region POST
           └─ HGVS / rsID / SPDI ─► Variant Recoder ─► vcf_string ─► VEP region POST
-       ─► extract (transcript consequences, gnomAD AF, prioritized transcript)
+       ─► extract (transcript consequences, pathogenicity scores, gnomAD AF, prioritized transcript)
        ─► shape (minimal | compact | standard | full) ─► response + _meta + provenance
 ```
+
+### Pathogenicity & conservation scores
+
+The public Ensembl REST serves several precomputed predictors as dedicated VEP
+toggles, and vep-link enables the headline ones **by default**, so a plain
+`annotate_variant` already carries them on the relevant (e.g. missense)
+transcript: **CADD** (`cadd_phred`/`cadd_raw`), **REVEL** (`revel`),
+**AlphaMissense** (`am_pathogenicity`/`am_class`), **GERP** (`conservation`),
+plus SIFT and PolyPhen. The scores commonly pulled *from* dbNSFP (REVEL, CADD,
+SIFT, PolyPhen, AlphaMissense) are covered by these toggles; `dbNSFP`, `SpliceAI`,
+and `LoF` remain allowlisted for self-hosted VEP instances but are not run by the
+public REST. `revel`, `am_pathogenicity`, `am_class`, and `conservation` ride
+along in `compact`, so they cost no extra round trip.
 
 Base URL is chosen per `assembly`: GRCh38 → `https://rest.ensembl.org`,
 GRCh37 → `https://grch37.rest.ensembl.org`. Batch POSTs are chunked at 200
