@@ -27,6 +27,8 @@ from vep_link.config import Settings
 from vep_link.exceptions import (
     AmbiguousMappingError,
     DataNotFoundError,
+    EnsemblApiError,
+    RateLimitedError,
     UnsupportedContigError,
     UpstreamInputError,
 )
@@ -261,6 +263,31 @@ async def test_annotate_batch_never_raises_on_bad_input(
     result = await service.annotate_batch(["junkhgvs:c.1A>T"], GRCH38)
     assert result["results"] == []
     assert len(result["errors"]) == 1
+
+
+async def test_annotate_batch_collects_upstream_fault_without_aborting(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # An rsID whose recoder call faults with an UPSTREAM error (not a parse/
+    # not-found) must be collected per-input, not abort the whole batch -- and a
+    # good coordinate alongside it must still reach the VEP stage.
+    client.recoder_get_error = EnsemblApiError("recoder 502")
+    result = await service.annotate_batch(["1-1000-A-T", "rs6025"], GRCH38)
+    codes = {e["error_code"] for e in result["errors"]}
+    assert codes == {"upstream_unavailable"}
+    assert result["summary"]["failed"] == 1
+    assert result["summary"]["requested"] == 2
+    # The good coordinate still flowed to the VEP region POST (batch not aborted).
+    assert client.vep_region_post_calls
+
+
+async def test_annotate_batch_maps_rate_limit_per_input(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_error = RateLimitedError("429")
+    result = await service.annotate_batch(["rs6025"], GRCH38)
+    assert result["errors"][0]["error_code"] == "rate_limited"
+    assert result["summary"]["failed"] == 1
 
 
 # --- recode ---------------------------------------------------------------

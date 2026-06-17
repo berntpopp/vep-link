@@ -34,9 +34,13 @@ from vep_link.config import Settings
 from vep_link.exceptions import (
     AmbiguousMappingError,
     DataNotFoundError,
+    EnsemblApiError,
+    RateLimitedError,
     UnsupportedContigError,
     UpstreamInputError,
+    UpstreamTimeoutError,
     VariantParseError,
+    VepLinkError,
 )
 from vep_link.models.enums import GenomeBuild, InputKind
 from vep_link.services._recoding import (
@@ -50,6 +54,27 @@ from vep_link.variant import (
     needs_recoding,
     parse_variant_input,
 )
+
+# Per-input batch error classification, most-specific subclass first
+# (UnsupportedContigError is a VariantParseError; both must precede it).
+_BATCH_ERROR_CODES: tuple[tuple[type[VepLinkError], str], ...] = (
+    (UnsupportedContigError, "unsupported_input"),
+    (VariantParseError, "invalid_input"),
+    (DataNotFoundError, "not_found"),
+    (RateLimitedError, "rate_limited"),
+    (UpstreamTimeoutError, "upstream_timeout"),
+    (EnsemblApiError, "upstream_unavailable"),
+    (UpstreamInputError, "not_found"),
+    (AmbiguousMappingError, "ambiguous"),
+)
+
+
+def _batch_error_code(exc: VepLinkError) -> str:
+    """Map a known vep-link exception to its batch per-input error code."""
+    for exc_type, code in _BATCH_ERROR_CODES:
+        if isinstance(exc, exc_type):
+            return code
+    return "internal_error"
 
 
 class VepService:
@@ -175,11 +200,13 @@ class VepService:
         for original in variants:
             try:
                 canonical, vep_line = await self._to_canonical(original, build)
-            except VariantParseError as exc:
-                errors.append(self._batch_error(original, "invalid_input", exc))
+            except VepLinkError as exc:
+                # Any known fault (parse, not-found, rate-limit, upstream) is
+                # collected per-input with its mapped code; never abort the batch.
+                errors.append(self._batch_error(original, _batch_error_code(exc), exc))
                 continue
-            except DataNotFoundError as exc:
-                errors.append(self._batch_error(original, "not_found", exc))
+            except Exception as exc:  # last-resort: one bad input cannot crash the batch
+                errors.append(self._batch_error(original, "internal_error", exc))
                 continue
             canonical_to_inputs.setdefault(canonical, []).append(original)
             canonical_to_line[canonical] = vep_line
