@@ -405,6 +405,20 @@ async def test_recode_echoes_inputs_in_order(
     assert [r["input"] for r in out] == ["NM_1.1:c.1A>T", "rs2"]
 
 
+async def test_recode_fields_filter_projects_output(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # The default rs123 entry carries hgvsg + vcf_string; an explicit fields
+    # filter must trim the OUTPUT to only those keys (+ identity), not just
+    # forward the param upstream.
+    client.recoder_post_return = [
+        {"input": "rs123", "id": "rs123", "A": {"hgvsg": ["g"], "vcf_string": ["1-1-A-T"]}}
+    ]
+    out = await service.recode(["rs123"], GRCH38, fields="hgvsg")
+    assert set(out[0]) == {"input", "id", "hgvsg"}
+    assert "vcf_string" not in out[0]
+
+
 async def test_recode_count_mismatch_falls_back_to_entry_input(
     service: VepService, client: FakeEnsemblClient
 ) -> None:

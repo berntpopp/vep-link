@@ -47,6 +47,7 @@ from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
     first_canonical_vcf_string,
+    project_recode_fields,
 )
 from vep_link.services.extraction import build_annotation
 from vep_link.services.warnings import multiple_alts_warning, ref_not_validated_warning
@@ -379,8 +380,15 @@ class VepService:
         # caller's query, so map our inputs back positionally. If the upstream
         # count diverges, fall back to the entry's own input rather than misalign.
         aligned = len(entries) == len(variants)
+        # Enforce the `fields` filter client-side: Ensembl may ignore or only
+        # partially honor the upstream param, so project after aggregation.
         return [
-            aggregate_recode_entry(entry, input_override=variants[i] if aligned else None)
+            project_recode_fields(
+                aggregate_recode_entry(
+                    entry, input_override=variants[i] if aligned else None
+                ),
+                fields,
+            )
             for i, entry in enumerate(entries)
         ]
 

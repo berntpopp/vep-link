@@ -11,6 +11,7 @@ from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
     first_canonical_vcf_string,
+    project_recode_fields,
 )
 
 
@@ -89,3 +90,19 @@ def test_aggregate_recode_entry_uses_input_override() -> None:
     assert result["input"] == "NM_1.1:c.1A>T"
     assert result["id"] == "rs1"
     assert result["hgvsg"] == ["NC:g.1A>T"]
+
+
+def test_project_recode_fields_keeps_only_requested() -> None:
+    result = {
+        "input": "x",
+        "id": "rs1",
+        "vcf_string": ["v"],
+        "hgvsg": ["g"],
+        "hgvsc": ["c"],
+        "hgvsp": ["p"],
+        "spdi": ["s"],
+    }
+    projected = project_recode_fields(result, "hgvsg,spdi,vcf_string")
+    assert set(projected) == {"input", "id", "vcf_string", "hgvsg", "spdi"}
+    # None -> unchanged (full documented set).
+    assert project_recode_fields(result, None) == result
