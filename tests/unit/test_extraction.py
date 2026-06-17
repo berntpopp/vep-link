@@ -213,6 +213,60 @@ def test_prioritize_transcript_falls_back_to_first() -> None:
     assert chosen["transcript_id"] == "FIRST"
 
 
+# --- select_representative (consequence-anchored) ------------------------
+
+
+def test_select_representative_anchors_on_most_severe() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [
+        # Neighbour gene, canonical, but only a MODIFIER consequence.
+        {
+            "transcript_id": "T_TSC2",
+            "gene_symbol": "TSC2",
+            "consequence_terms": ["downstream_gene_variant"],
+            "canonical": 1,
+        },
+        # Queried gene, carries the most-severe consequence, not canonical.
+        {
+            "transcript_id": "T_PKD1",
+            "gene_symbol": "PKD1",
+            "consequence_terms": ["stop_gained"],
+        },
+    ]
+    chosen = select_representative(rows, "stop_gained")
+    assert chosen is not None
+    assert chosen["gene_symbol"] == "PKD1"
+
+
+def test_select_representative_prefers_mane_within_subset() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [
+        {"transcript_id": "A", "gene_symbol": "G", "consequence_terms": ["missense_variant"]},
+        {
+            "transcript_id": "B",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "mane_select": "NM_1.1",
+        },
+    ]
+    chosen = select_representative(rows, "missense_variant")
+    assert chosen is not None
+    assert chosen["transcript_id"] == "B"
+
+
+def test_select_representative_falls_back_when_no_match() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [{"transcript_id": "A", "gene_symbol": "G", "consequence_terms": ["x"], "canonical": 1}]
+    # most_severe absent from every row -> fall back to biological ranking over all.
+    chosen = select_representative(rows, "not_present")
+    assert chosen is not None
+    assert chosen["transcript_id"] == "A"
+    assert select_representative([], "x") is None
+
+
 # --- extract_gnomad_frequencies ------------------------------------------
 
 
