@@ -35,6 +35,7 @@ from vep_link.exceptions import (
     UpstreamInputError,
     UpstreamTimeoutError,
 )
+from vep_link.observability.telemetry import record_upstream
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ class BaseHTTPClient:
             # spuriously report saturation.
             await self._acquire_slot(timeout=float(self._settings.QUEUE_WAIT_TIMEOUT))
             retry_after: float | None = None
+            attempt_start = loop.time()
             try:
                 response = await send(client, self._attempt_timeout(remaining))
                 status = response.status_code
@@ -213,6 +215,9 @@ class BaseHTTPClient:
                 if is_last:
                     raise EnsemblApiError(f"Upstream request failed: {exc!s}") from exc
             finally:
+                # Accumulate this attempt's upstream wall-time (success or fault)
+                # into the request-scoped telemetry, then free the concurrency slot.
+                record_upstream((loop.time() - attempt_start) * 1000)
                 self._semaphore.release()
 
             await self._backoff(attempt, retry_after)
