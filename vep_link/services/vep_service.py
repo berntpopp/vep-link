@@ -375,7 +375,14 @@ class VepService:
         entries = await self._client.recoder_post(
             list(variants), build, fields=fields if fields is not None else ""
         )
-        return [aggregate_recode_entry(entry) for entry in entries]
+        # The recoder preserves request order and POST entries do not echo the
+        # caller's query, so map our inputs back positionally. If the upstream
+        # count diverges, fall back to the entry's own input rather than misalign.
+        aligned = len(entries) == len(variants)
+        return [
+            aggregate_recode_entry(entry, input_override=variants[i] if aligned else None)
+            for i, entry in enumerate(entries)
+        ]
 
     # -- liftover ----------------------------------------------------------
 

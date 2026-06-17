@@ -392,6 +392,30 @@ async def test_recode_explicit_fields_passthrough(
     assert client.recoder_post_calls[0]["fields"] == "hgvsg,spdi"
 
 
+async def test_recode_echoes_inputs_in_order(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # The live recoder POST returns input=None per entry; map the caller's inputs
+    # back positionally (request order is preserved upstream).
+    client.recoder_post_return = [
+        {"input": None, "A": {"hgvsg": ["g.1"]}},
+        {"input": None, "A": {"hgvsg": ["g.2"]}},
+    ]
+    out = await service.recode(["NM_1.1:c.1A>T", "rs2"], GRCH38)
+    assert [r["input"] for r in out] == ["NM_1.1:c.1A>T", "rs2"]
+
+
+async def test_recode_count_mismatch_falls_back_to_entry_input(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # If upstream returns a different number of entries than requested, do not
+    # misalign: fall back to each entry's own input rather than guess.
+    client.recoder_post_return = [{"input": "echoed", "A": {"hgvsg": ["g.1"]}}]
+    out = await service.recode(["q1", "q2"], GRCH38)
+    assert len(out) == 1
+    assert out[0]["input"] == "echoed"
+
+
 # --- liftover -------------------------------------------------------------
 
 
