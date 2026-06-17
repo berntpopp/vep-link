@@ -384,9 +384,7 @@ class VepService:
         # partially honor the upstream param, so project after aggregation.
         return [
             project_recode_fields(
-                aggregate_recode_entry(
-                    entry, input_override=variants[i] if aligned else None
-                ),
+                aggregate_recode_entry(entry, input_override=variants[i] if aligned else None),
                 fields,
             )
             for i, entry in enumerate(entries)

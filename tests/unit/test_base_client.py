@@ -101,9 +101,7 @@ async def test_request_records_upstream_ms(
     # actual record_upstream calls (a >= 0 assertion alone can't prove wiring,
     # since the default is already 0 and respx is instant).
     captured: list[float] = []
-    monkeypatch.setattr(
-        "vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms)
-    )
+    monkeypatch.setattr("vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms))
     respx.get(URL).mock(return_value=httpx.Response(200, json={"ok": 1}))
     try:
         await client.get_json(URL)
@@ -119,12 +117,8 @@ async def test_request_records_upstream_ms_per_attempt(
 ) -> None:
     # Upstream time accumulates across retries: a 429 then 200 is two attempts.
     captured: list[float] = []
-    monkeypatch.setattr(
-        "vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms)
-    )
-    respx.get(URL).mock(
-        side_effect=[httpx.Response(429), httpx.Response(200, json={"ok": True})]
-    )
+    monkeypatch.setattr("vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms))
+    respx.get(URL).mock(side_effect=[httpx.Response(429), httpx.Response(200, json={"ok": True})])
     try:
         await client.get_json(URL)
     finally:

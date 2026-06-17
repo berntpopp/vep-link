@@ -70,9 +70,9 @@ def get_upstream_ms() -> int:
         return 0
 
 
-def telemetry_cache(
-    impl: Callable[..., Awaitable[Any]], *, maxsize: int, ttl: float
-) -> Callable[..., Awaitable[Any]]:
+def telemetry_cache[R](
+    impl: Callable[..., Awaitable[R]], *, maxsize: int, ttl: float
+) -> Callable[..., Awaitable[R]]:
     """Wrap ``impl`` in ``alru_cache`` and classify each call as miss/hit/coalesced.
 
     Classification runs entirely in the REQUESTING task's context (so the
@@ -92,7 +92,7 @@ def telemetry_cache(
     """
     inflight: set[tuple[Any, ...]] = set()
 
-    async def marking_impl(*args: Any) -> Any:
+    async def marking_impl(*args: Any) -> R:
         inflight.add(args)
         try:
             return await impl(*args)
@@ -101,7 +101,7 @@ def telemetry_cache(
 
     cached = alru_cache(maxsize=maxsize, ttl=ttl)(marking_impl)
 
-    async def wrapper(*args: Any) -> Any:
+    async def wrapper(*args: Any) -> R:
         if cached.cache_contains(*args):
             set_cache_status("coalesced" if args in inflight else "hit")
         else:

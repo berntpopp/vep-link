@@ -447,9 +447,7 @@ def test_standard_collapses_identical_and_counts() -> None:
 def test_standard_all_bypasses_collapse() -> None:
     shaped = shape_annotation(_missense_isoforms(), "standard", transcripts="all")
     assert len(shaped["transcript_consequences"]) == 4
-    assert all(
-        "equivalent_transcript_ids" not in r for r in shaped["transcript_consequences"]
-    )
+    assert all("equivalent_transcript_ids" not in r for r in shaped["transcript_consequences"])
 
 
 # --- full ----------------------------------------------------------------

@@ -56,6 +56,8 @@ from vep_link.observability.metrics import METRICS
 from vep_link.observability.telemetry import (
     get_cache_status,
     get_upstream_ms,
+)
+from vep_link.observability.telemetry import (
     reset as reset_telemetry,
 )
 
