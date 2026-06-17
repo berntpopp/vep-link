@@ -1,0 +1,75 @@
+# Nginx Proxy Manager deployment overlay for vep-link.
+#
+# Self-contained (used standalone, not layered on docker-compose.yml): one
+# unified container serves the FastAPI REST API on / and the MCP streamable-HTTP
+# transport on /mcp via a single port (8000). NPM reverse-proxies to the fixed
+# container_name on the shared external npm_default network. Mirrors the
+# gtex-link / uniprot-link fleet pattern. Stateless live Ensembl VEP passthrough
+# (annotate/recode/liftover) - no data volume needed.
+#
+#   docker compose -f docker/docker-compose.npm.yml --env-file .env.docker up -d --build
+name: vep-link-npm
+
+services:
+  vep_link:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    container_name: vep-link-npm
+    # NO published host ports - NPM handles all routing via the container name.
+    expose:
+      - "8000"
+    environment:
+      - VEP_LINK_MCP_TRANSPORT=unified
+      - VEP_LINK_MCP_HOST=0.0.0.0
+      - VEP_LINK_MCP_PORT=8000
+      - VEP_LINK_MCP_PATH=/mcp
+      - VEP_LINK_LOG_LEVEL=${LOG_LEVEL_API:-INFO}
+      - VEP_LINK_LOG_FORMAT=json
+    # Image CMD already runs `vep-link serve --transport unified ...`.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      # TMPDIR=/tmp/vep-link and the app's HTTP cache dir, both writable on the
+      # otherwise read-only rootfs.
+      - /tmp/vep-link:rw,noexec,nosuid,size=64m,mode=1777
+      - /var/cache/vep-link:rw,noexec,nosuid,size=128m,mode=0700
+    networks:
+      - vep_link_internal_net
+      - npm_proxy_network
+    deploy:
+      resources:
+        limits:
+          memory: ${VEP_API_MEMORY_LIMIT:-512m}
+          cpus: ${VEP_API_CPU_LIMIT:-0.5}
+          pids: 256
+        reservations:
+          memory: 128m
+          cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        labels: "service=vep-link,environment=production,proxy=npm"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    init: true
+
+networks:
+  vep_link_internal_net:
+    driver: bridge
+    name: vep_link_internal_net
+  npm_proxy_network:
+    external: true
+    name: ${NPM_SHARED_NETWORK_NAME:-npm_default}
