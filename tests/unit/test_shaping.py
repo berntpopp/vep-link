@@ -347,6 +347,53 @@ def test_standard_empty_transcripts() -> None:
     assert "transcripts_summary" not in shaped
 
 
+# --- collapse_identical --------------------------------------------------
+
+
+def test_collapse_identical_merges_only_byte_equal_rows() -> None:
+    from vep_link.mcp.shaping import collapse_identical
+
+    rows = [
+        {
+            "transcript_id": "A",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "impact": "MODERATE",
+            "hgvsc": "A:c.1G>A",
+            "hgvsp": "p.G1D",
+            "protein_position": "1",
+            "mane_select": "NM.1",
+        },
+        {
+            "transcript_id": "B",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "impact": "MODERATE",
+            "hgvsc": "A:c.1G>A",
+            "hgvsp": "p.G1D",
+            "protein_position": "1",
+        },
+        # Different hgvsc + protein_position -> MUST NOT merge.
+        {
+            "transcript_id": "C",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "impact": "MODERATE",
+            "hgvsc": "C:c.5G>A",
+            "hgvsp": "p.G2D",
+            "protein_position": "2",
+        },
+    ]
+    collapsed, merged = collapse_identical(rows)
+    assert len(collapsed) == 2
+    rep = next(r for r in collapsed if r["hgvsc"] == "A:c.1G>A")
+    assert rep["transcript_id"] == "A"  # MANE member kept as representative
+    assert rep["equivalent_transcript_ids"] == ["B"]
+    assert merged == 1  # one isoform folded in
+    solo = next(r for r in collapsed if r["hgvsc"] == "C:c.5G>A")
+    assert "equivalent_transcript_ids" not in solo
+
+
 # --- full ----------------------------------------------------------------
 
 

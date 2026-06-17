@@ -37,6 +37,7 @@ from vep_link.services.extraction import select_representative
 
 __all__ = [
     "DEFAULT_MAX_TRANSCRIPTS",
+    "collapse_identical",
     "pick_representative_transcript",
     "shape_annotation",
 ]
@@ -170,6 +171,56 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
     )
     shaped["frequencies"] = data.get("frequencies", [])
     return shaped
+
+
+# Fields whose equality defines an identical effect (everything projected except
+# the transcript identity itself). Collapsing rows equal on ALL of these is
+# loss-free: any difference in hgvsc/protein_position/etc. keeps the rows split.
+_COLLAPSE_SIGNATURE_FIELDS: tuple[str, ...] = tuple(
+    f for f in _TRANSCRIPT_FIELDS if f != "transcript_id"
+)
+
+
+def _signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Hashable identical-effect key built from the projected view of ``row``."""
+    projected = _project_transcript(row)
+    out: list[Any] = []
+    for field in _COLLAPSE_SIGNATURE_FIELDS:
+        value = projected.get(field)
+        out.append(tuple(value) if isinstance(value, list) else value)
+    return tuple(out)
+
+
+def collapse_identical(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Merge transcripts with an identical projected effect, order-preserving.
+
+    Operates on FLATTENED rows (which carry pick/mane_select/canonical), groups by
+    :func:`_signature`, keeps the biological-priority member of each group as the
+    representative with the others listed under ``equivalent_transcript_ids``
+    (omitted for singletons), and returns ``(representative_flattened_rows,
+    merged_count)`` where ``merged_count`` is the number of isoforms folded away.
+    """
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    order: list[tuple[Any, ...]] = []
+    for row in rows:
+        key = _signature(row)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    out: list[dict[str, Any]] = []
+    merged = 0
+    for key in order:
+        members = groups[key]
+        rep = pick_representative_transcript(members) or members[0]
+        others = [m["transcript_id"] for m in members if m is not rep and m.get("transcript_id")]
+        rep_row = dict(rep)
+        if others:
+            rep_row["equivalent_transcript_ids"] = others
+            merged += len(others)
+        out.append(rep_row)
+    return out, merged
 
 
 def _select_transcripts(
