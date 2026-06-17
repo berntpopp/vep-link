@@ -317,6 +317,31 @@ def test_build_annotation_missense_gene_symbol_and_count() -> None:
     assert len(ann["transcript_consequences"]) == 2
 
 
+def test_build_annotation_gene_symbol_matches_most_severe() -> None:
+    # Contiguous-gene locus: the canonical neighbour (TSC2) carries only a
+    # MODIFIER consequence; the worst effect (stop_gained) is on PKD1. The single
+    # top-level gene_symbol must name the gene the worst consequence occurs on.
+    record = {
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                "transcript_id": "T_TSC2",
+                "gene_symbol": "TSC2",
+                "consequence_terms": ["downstream_gene_variant"],
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "T_PKD1",
+                "gene_symbol": "PKD1",
+                "consequence_terms": ["stop_gained"],
+            },
+        ],
+    }
+    ann = build_annotation(record, variant_id="16-2090952-G-A", assembly="GRCh38")
+    assert ann["gene_symbol"] == "PKD1"
+    assert ann["most_severe_consequence"] == "stop_gained"
+
+
 def test_build_annotation_intergenic_empty_fields() -> None:
     ann = build_annotation(INTERGENIC, variant_id="1-2000-C-G", assembly="GRCh38")
     assert ann["gene_symbol"] is None

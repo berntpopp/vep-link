@@ -251,12 +251,16 @@ def build_annotation(
     """Shape a raw VEP record into the normalized annotation dict.
 
     The returned shape is the contract consumed by the service and
-    response-shaping layers. ``gene_symbol`` is taken from the prioritized
-    transcript (see :func:`prioritize_transcript`).
+    response-shaping layers. ``gene_symbol`` is taken from the consequence-anchored
+    representative transcript (see :func:`select_representative`), so it always
+    names a gene on which ``most_severe_consequence`` occurs -- even on a
+    contiguous-gene locus where the canonical transcript is a neighbour gene.
     """
     transcript_rows = flatten_consequences(vep_record)
-    prioritized = prioritize_transcript(transcript_rows)
-    gene_symbol = prioritized.get("gene_symbol") if prioritized is not None else None
+    representative = select_representative(
+        transcript_rows, vep_record.get("most_severe_consequence")
+    )
+    gene_symbol = representative.get("gene_symbol") if representative is not None else None
 
     return {
         "variant_id": variant_id,
