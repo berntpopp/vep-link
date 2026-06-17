@@ -79,3 +79,13 @@ def test_aggregate_omits_empty_fields() -> None:
 def test_aggregate_keeps_input_id_even_when_no_alleles() -> None:
     out = aggregate_recode_entry({"input": "x", "id": None})
     assert out == {"input": "x", "id": None}
+
+
+def test_aggregate_recode_entry_uses_input_override() -> None:
+    # The recoder POST entry's own `input` comes back null at runtime, so the
+    # caller's original query is echoed via input_override instead.
+    entry = {"input": None, "id": "rs1", "A": {"hgvsg": ["NC:g.1A>T"]}}
+    result = aggregate_recode_entry(entry, input_override="NM_1.1:c.1A>T")
+    assert result["input"] == "NM_1.1:c.1A>T"
+    assert result["id"] == "rs1"
+    assert result["hgvsg"] == ["NC:g.1A>T"]
