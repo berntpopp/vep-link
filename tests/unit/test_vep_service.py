@@ -524,6 +524,19 @@ async def test_resolve_is_cached(service: VepService, client: FakeEnsemblClient)
     assert len(client.vep_region_post_calls) == 1
 
 
+async def test_resolve_sets_cache_status_hit_on_repeat(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    from vep_link.observability import telemetry as t
+
+    t.reset()
+    await service.resolve("1-1000-A-T", GRCH38)
+    assert t.get_cache_status() == "miss"
+    t.reset()
+    await service.resolve("1-1000-A-T", GRCH38)
+    assert t.get_cache_status() == "hit"
+
+
 async def test_annotate_is_cached(service: VepService, client: FakeEnsemblClient) -> None:
     await service.annotate("1-1000-A-T", GRCH38, vep_options={"CADD": "1"})
     await service.annotate("1-1000-A-T", GRCH38, vep_options={"CADD": "1"})
