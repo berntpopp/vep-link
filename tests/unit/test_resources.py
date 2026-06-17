@@ -182,6 +182,21 @@ def test_server_capabilities_identity_fields() -> None:
     assert caps["disclaimer"] == RESEARCH_USE_NOTICE
 
 
+def test_server_version_is_0_3_0() -> None:
+    assert server_capabilities()["server_version"] == "0.3.0"
+
+
+def test_standard_tier_doc_mentions_collapsed() -> None:
+    assert "collapsed" in server_capabilities()["response_mode_tiers"]["standard"]
+
+
+def test_notes_mention_v03_contract() -> None:
+    blob = " ".join(server_capabilities()["notes"]).lower()
+    assert "cache_status" in blob
+    assert "upstream_ms" in blob
+    assert "most_severe_consequence" in blob
+
+
 def test_server_capabilities_assemblies_and_modes() -> None:
     caps = server_capabilities()
     assert caps["assemblies"] == ["GRCh38", "GRCh37"]

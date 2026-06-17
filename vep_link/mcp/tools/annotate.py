@@ -141,9 +141,11 @@ def register_annotate_tools(
             Field(
                 description=(
                     "standard-tier only: 'auto' (default) drops uninformative "
-                    "MODIFIER neighbour transcripts and caps to the most severe; "
-                    "'all' returns every transcript. Each variant carries its own "
-                    "transcripts_summary {shown,total} when truncated."
+                    "MODIFIER neighbour transcripts, collapses identical-effect "
+                    "isoforms (equivalent_transcript_ids), and caps to the most "
+                    "severe; 'all' returns every transcript uncollapsed. Each "
+                    "variant carries its own transcripts_summary "
+                    "{shown,collapsed,total} when filtered."
                 ),
             ),
         ] = "auto",
