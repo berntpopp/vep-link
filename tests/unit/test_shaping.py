@@ -268,7 +268,7 @@ def test_standard_auto_drops_uninformative_modifier() -> None:
     shaped = shape_annotation(DATA, ResponseMode.STANDARD)
     assert len(shaped["transcript_consequences"]) == 1
     assert shaped["transcript_consequences"][0]["transcript_id"] == "ENST00000123456"
-    assert shaped["transcripts_summary"] == {"shown": 1, "total": 2}
+    assert shaped["transcripts_summary"] == {"shown": 1, "collapsed": 0, "total": 2}
 
 
 def test_standard_all_opt_in_keeps_every_transcript() -> None:
@@ -316,7 +316,7 @@ def test_standard_caps_to_max_transcripts_by_severity() -> None:
     shaped = shape_annotation(ann, ResponseMode.STANDARD, max_transcripts=2)
     assert len(shaped["transcript_consequences"]) == 2
     assert shaped["transcript_consequences"][0]["impact"] == "HIGH"
-    assert shaped["transcripts_summary"] == {"shown": 2, "total": 5}
+    assert shaped["transcripts_summary"] == {"shown": 2, "collapsed": 0, "total": 5}
 
 
 def test_standard_transcripts_are_projected_and_null_stripped() -> None:
@@ -392,6 +392,64 @@ def test_collapse_identical_merges_only_byte_equal_rows() -> None:
     assert merged == 1  # one isoform folded in
     solo = next(r for r in collapsed if r["hgvsc"] == "C:c.5G>A")
     assert "equivalent_transcript_ids" not in solo
+
+
+def _missense_isoforms() -> dict[str, Any]:
+    base = {
+        "gene_symbol": "COL4A5",
+        "consequence_terms": ["missense_variant"],
+        "impact": "MODERATE",
+        "hgvsc": "x:c.1871G>A",
+        "hgvsp": "p.Gly624Asp",
+        "protein_position": "624",
+        "revel": 0.91,
+    }
+    return {
+        "variant_id": "X-1-G-A",
+        "assembly": "GRCh38",
+        "most_severe_consequence": "missense_variant",
+        "gene_symbol": "COL4A5",
+        "seq_region_name": "X",
+        "start": 1,
+        "end": 1,
+        "allele_string": "G/A",
+        "position_scores": {},
+        "frequencies": [],
+        "transcript_consequences": [
+            {**base, "transcript_id": "ENST_A", "mane_select": "NM.1"},
+            {**base, "transcript_id": "ENST_B"},
+            {**base, "transcript_id": "ENST_C"},
+            {
+                "gene_symbol": "COL4A5",
+                "transcript_id": "ENST_D",
+                "consequence_terms": ["missense_variant"],
+                "impact": "MODERATE",
+                "hgvsc": "y:c.1829G>A",
+                "hgvsp": "p.Gly610Asp",
+                "protein_position": "610",
+                "revel": 0.91,
+            },
+        ],
+    }
+
+
+def test_standard_collapses_identical_and_counts() -> None:
+    shaped = shape_annotation(_missense_isoforms(), "standard")
+    rows = shaped["transcript_consequences"]
+    # A/B/C collapse to one; D stays separate -> 2 shown.
+    assert len(rows) == 2
+    rep = next(r for r in rows if r["hgvsp"] == "p.Gly624Asp")
+    assert rep["transcript_id"] == "ENST_A"
+    assert sorted(rep["equivalent_transcript_ids"]) == ["ENST_B", "ENST_C"]
+    assert shaped["transcripts_summary"] == {"shown": 2, "collapsed": 2, "total": 4}
+
+
+def test_standard_all_bypasses_collapse() -> None:
+    shaped = shape_annotation(_missense_isoforms(), "standard", transcripts="all")
+    assert len(shaped["transcript_consequences"]) == 4
+    assert all(
+        "equivalent_transcript_ids" not in r for r in shaped["transcript_consequences"]
+    )
 
 
 # --- full ----------------------------------------------------------------
