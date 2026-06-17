@@ -53,6 +53,11 @@ from vep_link.exceptions import (
 )
 from vep_link.mcp.resources import build_meta
 from vep_link.observability.metrics import METRICS
+from vep_link.observability.telemetry import (
+    get_cache_status,
+    get_upstream_ms,
+    reset as reset_telemetry,
+)
 
 logger = structlog.get_logger("vep_link.mcp.errors")
 
@@ -224,21 +229,25 @@ def _inject_upstream(envelope: dict[str, Any], ctx: McpErrorContext) -> None:
 
 
 def _stamp_elapsed(envelope: dict[str, Any], start: float) -> int:
-    """Overwrite ``_meta.timing.elapsed_ms`` with the measured wall-clock cost.
+    """Stamp ``elapsed_ms`` + ``upstream_ms`` + ``cache_status`` into ``_meta.timing``.
 
     ``build_meta`` seeds ``timing.elapsed_ms`` to ``0`` at construction time
     (before the body has run); this stamps the real elapsed milliseconds once the
-    body has completed, on both success and error envelopes. Returns the value.
+    body has completed, on both success and error envelopes, plus the additive
+    request-scoped telemetry (Ensembl wall-time issued by this request and the
+    miss/hit/coalesced cache classification). Returns the elapsed value.
     """
     elapsed_ms = max(0, int((time.perf_counter() - start) * 1000))
     if isinstance(envelope, dict):
         meta = envelope.get("_meta")
         if isinstance(meta, dict):
             timing = meta.get("timing")
-            if isinstance(timing, dict):
-                timing["elapsed_ms"] = elapsed_ms
-            else:
-                meta["timing"] = {"elapsed_ms": elapsed_ms}
+            if not isinstance(timing, dict):
+                timing = {}
+                meta["timing"] = timing
+            timing["elapsed_ms"] = elapsed_ms
+            timing["upstream_ms"] = get_upstream_ms()
+            timing["cache_status"] = get_cache_status()
     return elapsed_ms
 
 
@@ -289,6 +298,10 @@ async def run_mcp_tool(
       id; the original exception text is not leaked.
     """
     start = time.perf_counter()
+    # Reset request-scoped telemetry so cache_status/upstream_ms reflect only this
+    # call (ContextVars are task-copied, but the cache child-task shares the
+    # mutable upstream accumulator -- reset installs a fresh one per request).
+    reset_telemetry()
     try:
         result = await body()
     except VepLinkError as exc:
