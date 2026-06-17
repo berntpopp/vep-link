@@ -28,22 +28,69 @@ from pydantic import Field
 from vep_link.config import settings
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
 from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
-from vep_link.mcp.resources import build_meta, provenance
+from vep_link.mcp.resources import build_meta, provenance, utc_now_iso
 from vep_link.mcp.shaping import shape_annotation
 from vep_link.mcp.tools._common import (
     ensure_upstream_available,
     new_request_id,
+    next_command,
     spliceai_dbnsfp_note,
     validate_vep_options,
 )
 from vep_link.models.enums import GenomeBuild
 
 _RESPONSE_MODE = Literal["minimal", "compact", "standard", "full"]
+_TRANSCRIPTS = Literal["auto", "all"]
 
 
 def _vep_region_endpoint(assembly: str) -> str:
     """Build the VEP region endpoint URL for the provenance block."""
     return f"{settings.vep_url(GenomeBuild(assembly))}/vep/homo_sapiens/region"
+
+
+def _other_assembly(assembly: str) -> str:
+    """The opposite human build (GRCh38 <-> GRCh37)."""
+    return "GRCh37" if assembly == "GRCh38" else "GRCh38"
+
+
+def _annotate_next_commands(
+    canonical_id: str | None, assembly: str, *, truncated: bool
+) -> list[dict[str, Any]]:
+    """Ready-to-call follow-ups for an annotation result.
+
+    Suggests recoding (all equivalent IDs) and lifting the canonical coordinate to
+    the other build; when the standard view was truncated, leads with a
+    widen-to-all re-call so the agent can pull every transcript on demand.
+    """
+    if not canonical_id:
+        return []
+    commands: list[dict[str, Any]] = []
+    if truncated:
+        commands.append(
+            next_command(
+                "annotate_variant",
+                {
+                    "variant": canonical_id,
+                    "assembly": assembly,
+                    "response_mode": "standard",
+                    "transcripts": "all",
+                },
+            )
+        )
+    commands.append(
+        next_command("recode_variant", {"variants": [canonical_id], "assembly": assembly})
+    )
+    commands.append(
+        next_command(
+            "liftover_variant",
+            {
+                "variant": canonical_id,
+                "from_assembly": assembly,
+                "to_assembly": _other_assembly(assembly),
+            },
+        )
+    )
+    return commands
 
 
 def register_annotate_tools(
@@ -82,11 +129,24 @@ def register_annotate_tools(
             Field(
                 description=(
                     "Verbosity tier: minimal (identity only), compact (default; "
-                    "representative transcript + frequencies), standard (all "
-                    "transcripts), or full (raw-ish payload)."
+                    "representative transcript + frequencies), standard (filtered "
+                    "transcripts), or full (raw-ish payload). Position scores "
+                    "(CADD/GERP) appear once under position_scores at all tiers "
+                    "above minimal."
                 ),
             ),
         ] = "compact",
+        transcripts: Annotated[
+            _TRANSCRIPTS,
+            Field(
+                description=(
+                    "standard-tier only: 'auto' (default) drops uninformative "
+                    "MODIFIER neighbour transcripts and caps to the most severe; "
+                    "'all' returns every transcript. See _meta.transcripts for the "
+                    "shown/total count when truncated."
+                ),
+            ),
+        ] = "auto",
         vep_options: Annotated[
             dict[str, str] | None,
             Field(
@@ -99,7 +159,7 @@ def register_annotate_tools(
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Use this for the full VEP annotation of one variant: consequences, gene/transcript impact, HGVS, MANE/canonical flags, SIFT/PolyPhen/CADD, and gnomAD frequencies. Input is parsed, recoded if needed, sent to the VEP region endpoint, then shaped to response_mode (start compact; widen to standard/full only if needed). Carries a provenance block (endpoint + citation)."""
+        """Use this for the full VEP annotation of one variant: consequences, gene/transcript impact, HGVS, MANE/canonical flags, SIFT/PolyPhen, plus variant-level CADD/GERP under position_scores and per-transcript REVEL/AlphaMissense, and gnomAD frequencies. Input is parsed, recoded if needed, sent to the VEP region endpoint, then shaped to response_mode (start compact; widen to standard/full only if needed). The standard tier filters noisy neighbour transcripts by default (set transcripts='all' for every isoform). Carries a provenance block (endpoint + citation) and _meta.next_commands follow-ups."""
 
         health = health_factory() if health_factory else None
 
@@ -108,16 +168,26 @@ def register_annotate_tools(
             ensure_upstream_available(health, assembly)
             service = service_factory()
             result = await service.annotate(variant, GenomeBuild(assembly), vep_options=vep_options)
-            shaped = shape_annotation(result, response_mode)
+            shaped = shape_annotation(result, response_mode, transcripts=transcripts)
+            # Promote the standard-tier truncation summary into _meta so the steer
+            # rides with the response metadata rather than the data body.
+            summary = shaped.pop("transcripts_summary", None)
+            canonical_id = shaped.get("variant_id") or result.get("variant_id")
             payload: dict[str, Any] = {
                 **shaped,
                 "provenance": provenance(
-                    assembly=assembly, endpoint=_vep_region_endpoint(assembly)
+                    assembly=assembly,
+                    endpoint=_vep_region_endpoint(assembly),
+                    retrieved=utc_now_iso(),
                 ),
                 "_meta": build_meta(
                     tool="annotate_variant",
                     request_id=new_request_id(),
                     assembly=assembly,
+                    next_commands=_annotate_next_commands(
+                        canonical_id, assembly, truncated=summary is not None
+                    ),
+                    extra={"transcripts": summary} if summary else None,
                 ),
             }
             note = spliceai_dbnsfp_note(vep_options)
@@ -161,6 +231,16 @@ def register_annotate_tools(
             _RESPONSE_MODE,
             Field(description="Verbosity tier applied to every result (default compact)."),
         ] = "compact",
+        transcripts: Annotated[
+            _TRANSCRIPTS,
+            Field(
+                description=(
+                    "standard-tier only: 'auto' (default) filters/caps each "
+                    "result's transcripts; 'all' returns every transcript. Each "
+                    "result carries its own transcripts_summary when truncated."
+                ),
+            ),
+        ] = "auto",
         vep_options: Annotated[
             dict[str, str] | None,
             Field(
@@ -169,7 +249,7 @@ def register_annotate_tools(
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Use this to annotate many variants (cap 200) in one call instead of looping annotate_variant. Returns a results list (each shaped to response_mode and tagged with its original input), a per-input errors list (parse/not-found failures that did not fail the batch), and a summary count. Identical canonical variants are de-duplicated into a single VEP request."""
+        """Use this to annotate many variants (cap 200) in one call instead of looping annotate_variant. Returns a results list (each shaped to response_mode and tagged with its original input), a per-input errors list (parse/not-found failures that did not fail the batch), and a summary count. Identical canonical variants are de-duplicated into a single VEP request. Each result's standard-tier transcript list is filtered by default; per-result truncation is reported in that result's transcripts_summary."""
 
         health = health_factory() if health_factory else None
 
@@ -183,7 +263,7 @@ def register_annotate_tools(
             shaped_results: list[dict[str, Any]] = []
             for item in batch["results"]:
                 original_input = item.get("input")
-                shaped = shape_annotation(item, response_mode)
+                shaped = shape_annotation(item, response_mode, transcripts=transcripts)
                 shaped_results.append({"input": original_input, **shaped})
             payload: dict[str, Any] = {
                 "assembly": assembly,

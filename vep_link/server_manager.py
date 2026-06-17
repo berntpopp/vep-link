@@ -30,6 +30,7 @@ import uvicorn
 from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 
 from vep_link import __version__
 from vep_link.api.ensembl_client import EnsemblClient
@@ -37,7 +38,11 @@ from vep_link.api.health import UpstreamHealth
 from vep_link.config import ServerConfig, settings
 from vep_link.logging_config import configure_logging
 from vep_link.mcp.facade import create_vep_mcp
+from vep_link.observability.metrics import METRICS, render_circuit_state
 from vep_link.services.vep_service import VepService
+
+# Prometheus text exposition format version (content-type parameter).
+_PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -129,6 +134,21 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "healthy", "service": "vep-link", "version": __version__}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> PlainTextResponse:
+        """Prometheus scrape target (ops endpoint, alongside /health).
+
+        Tool-call counters, error-code counts, and latency histograms come from
+        the in-process registry; the per-assembly circuit-breaker state is
+        rendered live from the upstream-health monitor. Data stays in MCP -- this
+        exposes only operational telemetry, not variant data.
+        """
+        body = METRICS.render_prometheus()
+        monitor = getattr(app.state, "upstream_health", None)
+        if monitor is not None:
+            body += render_circuit_state(monitor.snapshot())
+        return PlainTextResponse(body, media_type=_PROMETHEUS_CONTENT_TYPE)
 
     mcp = create_vep_mcp(
         service_factory=lambda: app.state.vep_service,

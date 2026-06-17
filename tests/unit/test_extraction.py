@@ -13,6 +13,7 @@ from tests.fixtures import VEP_REGION_INTERGENIC, VEP_REGION_MISSENSE
 from vep_link.services.extraction import (
     build_annotation,
     extract_gnomad_frequencies,
+    extract_position_scores,
     flatten_consequences,
     most_severe_transcript,
     prioritize_transcript,
@@ -40,7 +41,6 @@ def test_flatten_consequences_row0_fields() -> None:
     assert row["consequence_terms"] == ["missense_variant"]
     assert row["impact"] == "MODERATE"
     assert row["canonical"] == 1
-    assert row["cadd_phred"] == 25.1
     assert row["protein_position"] == "34"
     assert row["hgvsp"] == "ENSP00000123456.3:p.Lys34Asn"
     assert row["hgvsc"] == "ENST00000123456.7:c.100A>T"
@@ -54,12 +54,11 @@ def test_flatten_consequences_row0_fields() -> None:
 
 
 def test_flatten_consequences_row0_scoring_fields() -> None:
-    # Precomputed predictor / conservation scores served by the public REST.
+    # Substitution-specific predictor scores served by the public REST stay on
+    # the transcript row (REVEL + AlphaMissense). CADD/GERP are hoisted out (see
+    # test_flatten_consequences_omits_hoisted_position_scores).
     row = flatten_consequences(MISSENSE)[0]
-    assert row["cadd_phred"] == 25.1
-    assert row["cadd_raw"] == 3.214
     assert row["revel"] == 0.84
-    assert row["conservation"] == 5.6
     # AlphaMissense's nested object is flattened to two scalar columns.
     assert row["am_pathogenicity"] == 0.92
     assert row["am_class"] == "pathogenic"
@@ -74,12 +73,13 @@ def test_flatten_consequences_row1_missing_fields_default_none() -> None:
     assert row["hgvsp"] is None
     assert row["sift_score"] is None
     assert row["protein_position"] is None
-    # Scoring fields absent on this transcript -> present and None.
+    # Substitution-specific scoring fields absent on this transcript -> None.
     assert row["revel"] is None
-    assert row["cadd_raw"] is None
-    assert row["conservation"] is None
     assert row["am_pathogenicity"] is None
     assert row["am_class"] is None
+    # CADD/GERP are hoisted to position_scores, never on the row.
+    assert "cadd_raw" not in row
+    assert "conservation" not in row
 
 
 def test_flatten_consequences_alphamissense_non_dict_is_none() -> None:
@@ -230,6 +230,7 @@ def test_build_annotation_missense_shape() -> None:
         "strand": 1,
         "most_severe_consequence": "missense_variant",
         "gene_symbol": "GENE1",
+        "position_scores": {"cadd_phred": 25.1, "cadd_raw": 3.214, "conservation": 5.6},
         "transcript_consequences": flatten_consequences(MISSENSE),
         "frequencies": [{"allele": "T", "gnomade": 0.0001234, "gnomadg": 0.0002345}],
         "colocated_variants": MISSENSE["colocated_variants"],
@@ -248,6 +249,7 @@ def test_build_annotation_intergenic_empty_fields() -> None:
     assert ann["transcript_consequences"] == []
     assert ann["frequencies"] == []
     assert ann["colocated_variants"] == []
+    assert ann["position_scores"] == {}
     assert ann["most_severe_consequence"] == "intergenic_variant"
 
 
@@ -264,7 +266,76 @@ def test_build_annotation_keys_exact() -> None:
         "strand",
         "most_severe_consequence",
         "gene_symbol",
+        "position_scores",
         "transcript_consequences",
         "frequencies",
         "colocated_variants",
     }
+
+
+# --- extract_position_scores (genomic-position scores, hoisted once) ------
+
+
+def test_extract_position_scores_missense() -> None:
+    # CADD (phred/raw) and GERP conservation are genomic-position values:
+    # identical across transcripts, so they are hoisted to one variant-level dict.
+    assert extract_position_scores(MISSENSE) == {
+        "cadd_phred": 25.1,
+        "cadd_raw": 3.214,
+        "conservation": 5.6,
+    }
+
+
+def test_extract_position_scores_intergenic_is_empty() -> None:
+    assert extract_position_scores(INTERGENIC) == {}
+
+
+def test_extract_position_scores_omits_null_keys() -> None:
+    # Only non-null scores are carried (null-stripped); first non-null wins.
+    record = {
+        "transcript_consequences": [
+            {"transcript_id": "A"},
+            {"transcript_id": "B", "cadd_phred": 12.0, "conservation": 2.1},
+        ]
+    }
+    assert extract_position_scores(record) == {"cadd_phred": 12.0, "conservation": 2.1}
+
+
+def test_extract_position_scores_reads_intergenic_consequences() -> None:
+    # GERP conservation can live on intergenic_consequences when there are no
+    # transcript rows (e.g. a deep-intergenic variant).
+    record = {"intergenic_consequences": [{"conservation": 3.3}]}
+    assert extract_position_scores(record) == {"conservation": 3.3}
+
+
+# --- CADD/GERP are no longer duplicated on every transcript row ----------
+
+
+def test_flatten_consequences_omits_hoisted_position_scores() -> None:
+    # cadd_phred / cadd_raw / conservation are position-level: hoisted out of the
+    # per-transcript rows so they are not repeated on every transcript.
+    row = flatten_consequences(MISSENSE)[0]
+    assert "cadd_phred" not in row
+    assert "cadd_raw" not in row
+    assert "conservation" not in row
+    # Substitution-specific scores STAY per-transcript.
+    assert row["revel"] == 0.84
+    assert row["am_pathogenicity"] == 0.92
+    assert row["am_class"] == "pathogenic"
+
+
+def test_build_annotation_hoists_position_scores() -> None:
+    ann = build_annotation(MISSENSE, variant_id="1-1000-A-T", assembly="GRCh38")
+    assert ann["position_scores"] == {
+        "cadd_phred": 25.1,
+        "cadd_raw": 3.214,
+        "conservation": 5.6,
+    }
+    for row in ann["transcript_consequences"]:
+        assert "cadd_phred" not in row
+        assert "conservation" not in row
+
+
+def test_build_annotation_intergenic_position_scores_empty() -> None:
+    ann = build_annotation(INTERGENIC, variant_id="1-2000-C-G", assembly="GRCh38")
+    assert ann["position_scores"] == {}

@@ -134,6 +134,44 @@ async def test_run_mcp_tool_returns_body_result_unchanged_on_success() -> None:
     assert "error" not in result
 
 
+async def test_run_mcp_tool_stamps_elapsed_ms_on_success() -> None:
+    async def body() -> dict[str, Any]:
+        return {
+            "_meta": {
+                "tool": "resolve_variant",
+                "request_id": "abc",
+                "capabilities_version": "x",
+                "timing": {"elapsed_ms": 0},
+            }
+        }
+
+    result = await run_mcp_tool("resolve_variant", body, _ctx())
+    # The 0 stub seeded by build_meta is overwritten with a real measurement.
+    assert isinstance(result["_meta"]["timing"]["elapsed_ms"], int)
+    assert result["_meta"]["timing"]["elapsed_ms"] >= 0
+
+
+async def test_run_mcp_tool_records_call_and_error_metrics() -> None:
+    # A unique tool name keeps the process-wide singleton's counters deterministic
+    # for this test (no other test records under this name).
+    from vep_link.observability.metrics import METRICS
+
+    async def ok() -> dict[str, Any]:
+        return {
+            "_meta": {"tool": "t", "request_id": "r", "capabilities_version": "v"},
+        }
+
+    async def fail() -> dict[str, Any]:
+        raise DataNotFoundError("missing")
+
+    await run_mcp_tool("metrics_probe_tool", ok, _ctx(tool_name="metrics_probe_tool"))
+    await run_mcp_tool("metrics_probe_tool", fail, _ctx(tool_name="metrics_probe_tool"))
+    text = METRICS.render_prometheus()
+    assert 'vep_link_tool_calls_total{outcome="success",tool="metrics_probe_tool"} 1' in text
+    assert 'vep_link_tool_calls_total{outcome="error",tool="metrics_probe_tool"} 1' in text
+    assert 'vep_link_tool_errors_total{code="not_found",tool="metrics_probe_tool"} 1' in text
+
+
 # ---------------------------------------------------------------------------
 # run_mcp_tool: domain-exception -> code mapping
 # ---------------------------------------------------------------------------

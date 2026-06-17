@@ -12,10 +12,13 @@ delivered through MCP tools — see [mcp-tools.md](mcp-tools.md).
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness probe. Returns service status. |
+| `GET` | `/metrics` | Prometheus scrape target (ops telemetry). |
 | `*` | `/mcp` | Mounted MCP Streamable HTTP app (JSON-RPC). |
 
-There are no other REST endpoints. OpenAPI docs, ReDoc, and the schema route are
-disabled on the host (`docs_url`, `redoc_url`, `openapi_url` are all `None`).
+`/health` and `/metrics` are the only REST endpoints — both operational. All
+variant data is served through MCP; there are no data REST endpoints. OpenAPI
+docs, ReDoc, and the schema route are disabled on the host (`docs_url`,
+`redoc_url`, `openapi_url` are all `None`).
 
 ### `GET /health`
 
@@ -29,6 +32,31 @@ curl http://127.0.0.1:8000/health
 
 (Under the Docker stack the host port is **8021**:
 `curl http://localhost:8021/health`.)
+
+### `GET /metrics`
+
+Prometheus text-exposition telemetry for the MCP tool layer — operational only,
+no variant data. Scrape it like any Prometheus target:
+
+```bash
+curl http://127.0.0.1:8000/metrics
+```
+
+```
+# TYPE vep_link_tool_calls_total counter
+vep_link_tool_calls_total{outcome="success",tool="annotate_variant"} 12
+vep_link_tool_errors_total{code="not_found",tool="resolve_variant"} 1
+# TYPE vep_link_tool_latency_ms histogram
+vep_link_tool_latency_ms_bucket{le="100",tool="annotate_variant"} 9
+vep_link_tool_latency_ms_count{tool="annotate_variant"} 12
+# TYPE vep_link_circuit_state gauge
+vep_link_circuit_state{assembly="GRCh38",state="closed"} 1
+```
+
+Series: `vep_link_tool_calls_total{tool,outcome}` (success rate),
+`vep_link_tool_errors_total{tool,code}` (error-code distribution),
+`vep_link_tool_latency_ms` (per-tool latency histogram), and
+`vep_link_circuit_state{assembly,state}` (live circuit-breaker state, one-hot).
 
 ### `/mcp` (MCP Streamable HTTP)
 
@@ -61,10 +89,11 @@ Present on every success and error payload:
 |-------|------|-------------|
 | `tool` | `str` | The tool that produced the payload. |
 | `request_id` | `str` | Short (12 hex char) per-call id. On `internal_error` this doubles as the correlation id. |
-| `timing.elapsed_ms` | `int` | Elapsed time in milliseconds. |
+| `timing.elapsed_ms` | `int` | Measured wall-clock cost of the call, in milliseconds (stamped on success and error envelopes). |
 | `capabilities_version` | `str` | 12-hex-char content hash of the capabilities document; a warm client compares it to skip re-fetching `get_capabilities`. |
 | `unsafe_for_clinical_use` | `bool` | Always `true` — research-use marker. |
-| `next_commands` | `list` | Ready-to-call follow-up steps (`{tool, arguments}`); often empty. `resolve_variant` populates it with an `annotate_variant` suggestion. |
+| `next_commands` | `list` | Ready-to-call follow-up steps (`{tool, arguments}`). `resolve_variant` suggests `annotate_variant`; `annotate_variant` suggests `recode_variant`, `liftover_variant`, and a widen-to-`all` re-call when the `standard` view is truncated. |
+| `transcripts` | `object` | `annotate_variant` only, `standard` tier: `{shown, total}` when the transcript list was filtered/capped (absent otherwise). |
 | `assembly` | `str` | Included only when the call has an assembly context (e.g. `GRCh38`). |
 
 ### `provenance` block (`annotate_variant`)
@@ -74,7 +103,7 @@ Present on every success and error payload:
 | `data_source` | `str` | `"Ensembl VEP / Variant Recoder REST"`. |
 | `assembly` | `str` | Reference build of the result. |
 | `endpoint` | `str` | The upstream endpoint URL (e.g. `https://rest.ensembl.org/vep/homo_sapiens/region`). |
-| `retrieved` | `str \| null` | ISO-8601 retrieval timestamp when available. |
+| `retrieved` | `str \| null` | ISO-8601 UTC timestamp of when the result was fetched (populated on `annotate_variant`). |
 | `recommended_citation` | `str` | The Ensembl VEP citation (PMID:27268795); paste verbatim. |
 
 ## Error envelope
@@ -94,7 +123,7 @@ Failures return a deterministic structured envelope. An LLM client branches on
   "_meta": {
     "tool": "<tool>",
     "request_id": "<id>",
-    "timing": {"elapsed_ms": 0},
+    "timing": {"elapsed_ms": 21},
     "capabilities_version": "<hash>",
     "unsafe_for_clinical_use": true,
     "next_commands": [],

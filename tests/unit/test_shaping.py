@@ -22,8 +22,10 @@ from vep_link.services.extraction import build_annotation
 
 DATA = build_annotation(VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembly="GRCh38")
 
-# The key set every projected transcript (representative or in the standard
-# list) must carry.
+# The maximal key set a fully-populated projected transcript can carry. CADD and
+# GERP (cadd_phred/conservation) are NOT here: they are genomic-position scores
+# hoisted once to a variant-level ``position_scores`` object. Null-valued keys
+# are dropped, so a sparse transcript carries a subset of these.
 _REP_KEYS = {
     "gene_symbol",
     "transcript_id",
@@ -34,11 +36,9 @@ _REP_KEYS = {
     "protein_position",
     "sift_prediction",
     "polyphen_prediction",
-    "cadd_phred",
     "revel",
     "am_pathogenicity",
     "am_class",
-    "conservation",
 }
 
 
@@ -133,20 +133,60 @@ def test_compact_representative_transcript() -> None:
     shaped = shape_annotation(DATA, ResponseMode.COMPACT)
     rep = shaped["representative_transcript"]
     assert rep is not None
+    # Fully-populated transcript -> carries the whole projected key set; CADD is
+    # no longer per-transcript (it is hoisted to position_scores).
     assert set(rep.keys()) == _REP_KEYS
     assert rep["gene_symbol"] == "GENE1"
-    assert rep["cadd_phred"] == 25.1
+    assert "cadd_phred" not in rep
     assert rep["transcript_id"] == "ENST00000123456"
 
 
-def test_compact_representative_carries_pathogenicity_scores() -> None:
-    # The default (compact) mode must already expose the headline predictors so
-    # an interpreter does not have to widen to standard/full to see them.
+def test_compact_representative_carries_substitution_scores() -> None:
+    # The default (compact) mode must already expose the substitution-specific
+    # predictors so an interpreter need not widen to standard/full to see them.
     rep = shape_annotation(DATA, ResponseMode.COMPACT)["representative_transcript"]
     assert rep["revel"] == 0.84
     assert rep["am_pathogenicity"] == 0.92
     assert rep["am_class"] == "pathogenic"
-    assert rep["conservation"] == 5.6
+    # GERP conservation is a genomic-position score: hoisted, not on the row.
+    assert "conservation" not in rep
+
+
+def test_compact_hoists_position_scores_once() -> None:
+    # CADD/GERP appear exactly once, at the variant level, not per transcript.
+    shaped = shape_annotation(DATA, ResponseMode.COMPACT)
+    assert shaped["position_scores"] == {
+        "cadd_phred": 25.1,
+        "cadd_raw": 3.214,
+        "conservation": 5.6,
+    }
+
+
+def test_compact_null_strips_representative() -> None:
+    # A sparse transcript drops its null keys instead of serializing them.
+    sparse = build_annotation(
+        {
+            "most_severe_consequence": "upstream_gene_variant",
+            "transcript_consequences": [
+                {
+                    "gene_symbol": "G",
+                    "transcript_id": "ENST_SPARSE",
+                    "consequence_terms": ["upstream_gene_variant"],
+                    "impact": "MODIFIER",
+                }
+            ],
+        },
+        variant_id="1-5-A-T",
+        assembly="GRCh38",
+    )
+    rep = shape_annotation(sparse, ResponseMode.COMPACT)["representative_transcript"]
+    assert set(rep.keys()) == {"gene_symbol", "transcript_id", "consequence_terms", "impact"}
+    assert "hgvsc" not in rep
+    assert "revel" not in rep
+
+
+def test_minimal_omits_position_scores() -> None:
+    assert "position_scores" not in shape_annotation(DATA, ResponseMode.MINIMAL)
 
 
 def test_compact_includes_position_and_frequencies() -> None:
@@ -186,15 +226,69 @@ def test_compact_is_default_mode() -> None:
 # --- standard ------------------------------------------------------------
 
 
-def test_standard_transcript_consequences_count() -> None:
+def test_standard_auto_drops_uninformative_modifier() -> None:
+    # The fixture's 2nd transcript is an all-null MODIFIER upstream neighbor: the
+    # default (auto) standard view drops it and reports 1 of 2.
     shaped = shape_annotation(DATA, ResponseMode.STANDARD)
+    assert len(shaped["transcript_consequences"]) == 1
+    assert shaped["transcript_consequences"][0]["transcript_id"] == "ENST00000123456"
+    assert shaped["transcripts_summary"] == {"shown": 1, "total": 2}
+
+
+def test_standard_all_opt_in_keeps_every_transcript() -> None:
+    # transcripts="all" disables the filter/cap: both transcripts are returned and
+    # no truncation summary is emitted (shown == total).
+    shaped = shape_annotation(DATA, ResponseMode.STANDARD, transcripts="all")
     assert len(shaped["transcript_consequences"]) == 2
+    assert "transcripts_summary" not in shaped
 
 
-def test_standard_transcripts_are_projected() -> None:
-    shaped = shape_annotation(DATA, ResponseMode.STANDARD)
+def test_standard_null_strips_uninformative_row_in_all_mode() -> None:
+    # Even the kept-by-opt-in MODIFIER row is null-stripped to its non-null keys.
+    shaped = shape_annotation(DATA, ResponseMode.STANDARD, transcripts="all")
+    neighbor = next(
+        tc for tc in shaped["transcript_consequences"] if tc["transcript_id"] == "ENST00000999999"
+    )
+    assert set(neighbor.keys()) == {
+        "gene_symbol",
+        "transcript_id",
+        "consequence_terms",
+        "impact",
+    }
+
+
+def test_standard_caps_to_max_transcripts_by_severity() -> None:
+    # With more informative transcripts than the cap, only the top-N by impact
+    # severity are shown and the rest are summarized as truncated.
+    tcs = [
+        {
+            "transcript_id": f"ENST{i}",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "impact": "MODERATE",
+            "hgvsc": f"c.{i}A>T",
+        }
+        for i in range(5)
+    ]
+    # One HIGH-impact transcript must survive the cap (sorted first).
+    tcs[3]["impact"] = "HIGH"
+    ann = build_annotation(
+        {"most_severe_consequence": "missense_variant", "transcript_consequences": tcs},
+        variant_id="1-9-A-T",
+        assembly="GRCh38",
+    )
+    shaped = shape_annotation(ann, ResponseMode.STANDARD, max_transcripts=2)
+    assert len(shaped["transcript_consequences"]) == 2
+    assert shaped["transcript_consequences"][0]["impact"] == "HIGH"
+    assert shaped["transcripts_summary"] == {"shown": 2, "total": 5}
+
+
+def test_standard_transcripts_are_projected_and_null_stripped() -> None:
+    shaped = shape_annotation(DATA, ResponseMode.STANDARD, transcripts="all")
     for tc in shaped["transcript_consequences"]:
-        assert set(tc.keys()) == _REP_KEYS
+        # Every key present is in the allowed set and no key has a null value.
+        assert set(tc.keys()) <= _REP_KEYS
+        assert all(v is not None for v in tc.values())
 
 
 def test_standard_includes_frequencies_and_position() -> None:
@@ -202,6 +296,7 @@ def test_standard_includes_frequencies_and_position() -> None:
     assert shaped["frequencies"] == [{"allele": "T", "gnomade": 0.0001234, "gnomadg": 0.0002345}]
     assert shaped["seq_region_name"] == "1"
     assert shaped["start"] == 1000
+    assert shaped["position_scores"]["cadd_phred"] == 25.1
 
 
 def test_standard_omits_representative_and_colocated() -> None:
@@ -213,6 +308,7 @@ def test_standard_omits_representative_and_colocated() -> None:
 def test_standard_empty_transcripts() -> None:
     shaped = shape_annotation(_empty_annotation(), ResponseMode.STANDARD)
     assert shaped["transcript_consequences"] == []
+    assert "transcripts_summary" not in shaped
 
 
 # --- full ----------------------------------------------------------------

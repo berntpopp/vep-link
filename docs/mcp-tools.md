@@ -23,7 +23,7 @@ list):
 "_meta": {
   "tool": "annotate_variant",
   "request_id": "a1b2c3d4e5f6",
-  "timing": {"elapsed_ms": 0},
+  "timing": {"elapsed_ms": 37},
   "capabilities_version": "<12-hex-char hash>",
   "unsafe_for_clinical_use": true,
   "next_commands": [],
@@ -31,8 +31,12 @@ list):
 }
 ```
 
-`annotate_variant` additionally carries a `provenance` block; `resolve_variant`
-populates `_meta.next_commands` with a ready-to-call `annotate_variant` follow-up.
+`timing.elapsed_ms` is the measured wall-clock cost of the tool call (stamped on
+both success and error envelopes). `annotate_variant` additionally carries a
+`provenance` block (with a real `retrieved` timestamp) and populates
+`_meta.next_commands` with ready-to-call follow-ups (`recode_variant`,
+`liftover_variant`, and a widen-to-`all` re-call when the `standard` view is
+truncated); `resolve_variant` points its `next_commands` at `annotate_variant`.
 
 ---
 
@@ -63,8 +67,8 @@ every `_meta` and skips re-fetching when unchanged.
   "response_modes": ["minimal", "compact", "standard", "full"],
   "response_mode_tiers": {
     "minimal": "variant_id + most_severe_consequence + gene_symbol + _meta",
-    "compact": "representative (prioritized) transcript + key fields (default)",
-    "standard": "all transcript consequences, key fields each",
+    "compact": "representative (prioritized) transcript + key fields + position_scores (default)",
+    "standard": "transcript consequences (filtered/capped, null-stripped); transcripts='all' for every isoform",
     "full": "raw-ish VEP payload (all fields) + colocated variants/frequencies"
   },
   "tools": [{"name": "get_capabilities", "summary": "...", "token_cost_hint": "low"}, "..."],
@@ -122,7 +126,7 @@ the full annotation.
   "_meta": {
     "tool": "resolve_variant",
     "request_id": "9f0e1d2c3b4a",
-    "timing": {"elapsed_ms": 0},
+    "timing": {"elapsed_ms": 21},
     "capabilities_version": "<hash>",
     "unsafe_for_clinical_use": true,
     "next_commands": [
@@ -199,6 +203,7 @@ endpoint, then shaped to `response_mode`. Carries a `provenance` block.
 | `variant` | `str` (1–200 chars) | required | Coordinate, rsID, HGVS, SPDI, or CNV. |
 | `assembly` | `"GRCh38" \| "GRCh37"` | `"GRCh38"` | Reference build. |
 | `response_mode` | `"minimal" \| "compact" \| "standard" \| "full"` | `"compact"` | Verbosity tier (see below). |
+| `transcripts` | `"auto" \| "all"` | `"auto"` | `standard` tier only. `auto` drops uninformative MODIFIER neighbour transcripts and caps to the most severe; `all` returns every isoform. See `_meta.transcripts` for `shown`/`total` when truncated. |
 | `vep_options` | `dict[str, str] \| None` | `None` | VEP flag overrides; keys must be in the allowlist. Disallowed keys → `invalid_input`. |
 
 ### `vep_options` allowlist
@@ -231,20 +236,25 @@ toggles, and vep-link enables the headline ones **by default** so a plain
 `annotate_variant` call already carries them on the relevant transcript (they
 populate only for applicable variants, e.g. missense/coding):
 
-| Field(s) | Toggle | Meaning |
-|----------|--------|---------|
-| `cadd_phred`, `cadd_raw` | `CADD` | CADD deleteriousness (PHRED-scaled + raw). |
-| `revel` | `REVEL` | REVEL missense pathogenicity ensemble score (0–1). |
-| `am_pathogenicity`, `am_class` | `AlphaMissense` | AlphaMissense score (0–1) + class (`benign`/`pathogenic`/`ambiguous`). |
-| `conservation` | `Conservation` | GERP conservation score. |
-| `sift_score`, `sift_prediction` | (default) | SIFT. |
-| `polyphen_score`, `polyphen_prediction` | (default) | PolyPhen. |
+| Field(s) | Toggle | Location | Meaning |
+|----------|--------|----------|---------|
+| `cadd_phred`, `cadd_raw` | `CADD` | `position_scores` | CADD deleteriousness (PHRED-scaled + raw). |
+| `conservation` | `Conservation` | `position_scores` | GERP conservation score. |
+| `revel` | `REVEL` | per transcript | REVEL missense pathogenicity ensemble score (0–1). |
+| `am_pathogenicity`, `am_class` | `AlphaMissense` | per transcript | AlphaMissense score (0–1) + class (`benign`/`pathogenic`/`ambiguous`). |
+| `sift_score`, `sift_prediction` | (default) | per transcript | SIFT. |
+| `polyphen_score`, `polyphen_prediction` | (default) | per transcript | PolyPhen. |
 
-`revel`, `am_pathogenicity`, `am_class`, and `conservation` (plus `cadd_phred`)
-appear in the `compact` `representative_transcript` and in every `standard`
-transcript; `cadd_raw` and the `*_score` predictor values appear in `full`. Other
-allowlisted toggles (e.g. `EVE`, `dbscSNV`, `MaxEntScan`) can be requested via
-`vep_options` and are returned under their native VEP keys in `full`.
+**Position vs. substitution scores.** CADD and GERP (`conservation`) are
+genomic-position values — identical across a variant's transcripts — so they are
+hoisted **once** to a variant-level `position_scores` object instead of being
+repeated on every transcript row (a large token saving on multi-transcript
+variants). `revel`, `am_pathogenicity`, and `am_class` are substitution-specific
+and stay per transcript. `position_scores` is present in `compact`/`standard`
+(when non-empty); `cadd_raw` and the `*_score` predictor values also surface in
+`full`. Other allowlisted toggles (e.g. `EVE`, `dbscSNV`, `MaxEntScan`) can be
+requested via `vep_options` and are returned under their native VEP keys in
+`full`.
 
 > **Instance-dependent plugins.** `SpliceAI`, `dbNSFP`, and `LoF` are allowlisted
 > (so they can be sent to a VEP instance configured with them) but are **not run
@@ -262,12 +272,15 @@ allowlisted toggles (e.g. `EVE`, `dbscSNV`, `MaxEntScan`) can be requested via
 | Mode | Fields |
 |------|--------|
 | `minimal` | `variant_id`, `assembly`, `most_severe_consequence`, `gene_symbol` (+ `provenance`, `_meta`). |
-| `compact` (default) | minimal + position (`seq_region_name`, `start`, `end`, `allele_string`) + a single prioritized `representative_transcript` + gnomAD `frequencies`. |
-| `standard` | identity/position + **all** `transcript_consequences` (each projected to the compact key set) + `frequencies`. |
-| `full` | the entire normalized annotation, including all transcripts, `colocated_variants`, and `strand`. |
+| `compact` (default) | minimal + position (`seq_region_name`, `start`, `end`, `allele_string`) + variant-level `position_scores` (CADD/GERP, when present) + a single prioritized `representative_transcript` (null fields dropped) + gnomAD `frequencies`. |
+| `standard` | identity/position + `position_scores` + `transcript_consequences` (each projected and null-stripped) + `frequencies`. By default (`transcripts="auto"`) uninformative MODIFIER neighbour transcripts are dropped and the list is capped to the most severe `max_transcripts`; `_meta.transcripts` then reports `{shown, total}`. Pass `transcripts="all"` for every isoform. |
+| `full` | the entire normalized annotation, including all transcripts, `position_scores`, `colocated_variants`, and `strand`. |
 
 Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE >
-`canonical == 1` > first.
+`canonical == 1` > first. A transcript is **uninformative** (and dropped from the
+`standard` auto view) when its impact is `MODIFIER` and it carries no
+substitution signal (no HGVS, SIFT/PolyPhen, REVEL, or AlphaMissense) — e.g. an
+`upstream_gene_variant` on a flanking gene.
 
 **Example call.**
 
@@ -286,7 +299,7 @@ Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE 
   "most_severe_consequence": "missense_variant",
   "gene_symbol": "F5",
   "provenance": {"data_source": "Ensembl VEP / Variant Recoder REST", "assembly": "GRCh38",
-    "endpoint": "https://rest.ensembl.org/vep/homo_sapiens/region", "retrieved": null,
+    "endpoint": "https://rest.ensembl.org/vep/homo_sapiens/region", "retrieved": "2026-06-17T12:00:00+00:00",
     "recommended_citation": "McLaren W, et al. The Ensembl Variant Effect Predictor. Genome Biol. 2016;17:122. PMID:27268795."},
   "_meta": {"tool": "annotate_variant", "request_id": "...", "assembly": "GRCh38", "...": "..."}
 }
@@ -304,6 +317,7 @@ Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE 
   "start": 169549811,
   "end": 169549811,
   "allele_string": "T/C",
+  "position_scores": {"cadd_phred": 23.1, "cadd_raw": 4.02, "conservation": 5.1},
   "representative_transcript": {
     "gene_symbol": "F5",
     "transcript_id": "ENST00000367797",
@@ -314,11 +328,9 @@ Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE 
     "protein_position": "534",
     "sift_prediction": "deleterious",
     "polyphen_prediction": "probably_damaging",
-    "cadd_phred": 23.1,
     "revel": 0.81,
     "am_pathogenicity": 0.74,
-    "am_class": "pathogenic",
-    "conservation": 5.1
+    "am_class": "pathogenic"
   },
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "provenance": {"...": "..."},
@@ -326,9 +338,15 @@ Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE 
 }
 ```
 
-**`standard`** — same identity/position fields, but `representative_transcript` is
-replaced by a `transcript_consequences` array (every transcript, each projected to
-the compact key set) plus `frequencies`.
+CADD/GERP appear once under `position_scores`; the `representative_transcript`
+keeps only the substitution-specific predictors (REVEL, AlphaMissense) and drops
+any null keys.
+
+**`standard`** — same identity/position fields plus `position_scores`, but
+`representative_transcript` is replaced by a `transcript_consequences` array (each
+projected and null-stripped). By default the noisy MODIFIER neighbour transcripts
+are filtered out and the list is capped, with `_meta.transcripts` reporting how
+many of the total are shown. Pass `transcripts="all"` to get every isoform.
 
 ```json
 {
@@ -337,26 +355,30 @@ the compact key set) plus `frequencies`.
   "most_severe_consequence": "missense_variant",
   "gene_symbol": "F5",
   "seq_region_name": "1", "start": 169549811, "end": 169549811, "allele_string": "T/C",
+  "position_scores": {"cadd_phred": 23.1, "cadd_raw": 4.02, "conservation": 5.1},
   "transcript_consequences": [
-    {"gene_symbol": "F5", "transcript_id": "ENST00000367797", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "hgvsc": "...", "hgvsp": "...", "protein_position": "534", "sift_prediction": "deleterious", "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1, "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic", "conservation": 5.1}
+    {"gene_symbol": "F5", "transcript_id": "ENST00000367797", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "hgvsc": "...", "hgvsp": "...", "protein_position": "534", "sift_prediction": "deleterious", "polyphen_prediction": "probably_damaging", "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic"}
   ],
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "provenance": {"...": "..."},
-  "_meta": {"...": "..."}
+  "_meta": {"tool": "annotate_variant", "transcripts": {"shown": 1, "total": 9},
+    "next_commands": [{"tool": "annotate_variant", "arguments": {"variant": "1-169549811-T-C", "assembly": "GRCh38", "response_mode": "standard", "transcripts": "all"}}, "..."], "...": "..."}
 }
 ```
 
-**`full`** — the entire normalized annotation, including `strand`, the full
-`transcript_consequences` (with `gene_id`, `biotype`, `amino_acids`, `codons`,
-`sift_score`, `polyphen_score`, `cadd_raw`, `revel`, `am_pathogenicity`,
-`am_class`, `conservation`, etc.), and the raw `colocated_variants` array.
+**`full`** — the entire normalized annotation, including `strand`,
+`position_scores`, the full `transcript_consequences` (with `gene_id`, `biotype`,
+`amino_acids`, `codons`, `sift_score`, `polyphen_score`, `revel`,
+`am_pathogenicity`, `am_class`, etc. — note CADD/GERP live in `position_scores`,
+not on the rows), and the raw `colocated_variants` array.
 
 ```json
 {
   "variant_id": "1-169549811-T-C", "assembly": "GRCh38", "input": "1 169549811 . T C . . .",
   "seq_region_name": "1", "start": 169549811, "end": 169549811, "allele_string": "T/C", "strand": 1,
   "most_severe_consequence": "missense_variant", "gene_symbol": "F5",
-  "transcript_consequences": [{"gene_id": "ENSG00000198734", "gene_symbol": "F5", "transcript_id": "ENST00000367797", "biotype": "protein_coding", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "canonical": 1, "mane": ["MANE_Select"], "hgvsc": "...", "hgvsp": "...", "amino_acids": "R/Q", "codons": "cGg/cAg", "sift_score": 0.01, "sift_prediction": "deleterious", "polyphen_score": 0.98, "polyphen_prediction": "probably_damaging", "cadd_phred": 23.1, "cadd_raw": 4.02, "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic", "conservation": 5.1, "protein_position": "534"}],
+  "position_scores": {"cadd_phred": 23.1, "cadd_raw": 4.02, "conservation": 5.1},
+  "transcript_consequences": [{"gene_id": "ENSG00000198734", "gene_symbol": "F5", "transcript_id": "ENST00000367797", "biotype": "protein_coding", "consequence_terms": ["missense_variant"], "impact": "MODERATE", "canonical": 1, "mane": ["MANE_Select"], "hgvsc": "...", "hgvsp": "...", "amino_acids": "R/Q", "codons": "cGg/cAg", "sift_score": 0.01, "sift_prediction": "deleterious", "polyphen_score": 0.98, "polyphen_prediction": "probably_damaging", "revel": 0.81, "am_pathogenicity": 0.74, "am_class": "pathogenic", "protein_position": "534"}],
   "frequencies": [{"allele": "C", "gnomade": 0.012, "gnomadg": 0.014}],
   "colocated_variants": [{"id": "rs6025", "frequencies": {"C": {"gnomade": 0.012, "gnomadg": 0.014}}}],
   "provenance": {"...": "..."},
@@ -386,6 +408,7 @@ collected per-input.
 | `variants` | `list[str]` (1–200) | required | Up to 200 variants. >200 → `invalid_input`. |
 | `assembly` | `"GRCh38" \| "GRCh37"` | `"GRCh38"` | Reference build. |
 | `response_mode` | `"minimal" \| "compact" \| "standard" \| "full"` | `"compact"` | Applied to every result. |
+| `transcripts` | `"auto" \| "all"` | `"auto"` | `standard` tier only; applied to every result. Each truncated result carries its own `transcripts_summary` (`{shown, total}`) in its body. |
 | `vep_options` | `dict[str, str] \| None` | `None` | Same allowlist as `annotate_variant`. |
 
 **Example call.**

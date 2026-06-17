@@ -16,6 +16,7 @@ The local dev server exposes:
 
 - MCP Streamable HTTP: `http://127.0.0.1:8000/mcp`
 - Health: `http://127.0.0.1:8000/health`
+- Metrics (Prometheus): `http://127.0.0.1:8000/metrics`
 
 Manual equivalent:
 
@@ -114,12 +115,21 @@ Coordinate and CNV inputs skip the recoder and can be annotated directly:
 Start `compact` and widen only if needed:
 
 - `minimal` — identity only (`variant_id`, `most_severe_consequence`, `gene_symbol`).
-- `compact` (default) — adds position + one prioritized `representative_transcript`
-  (with the headline pathogenicity scores `cadd_phred`, `revel`,
-  `am_pathogenicity`/`am_class`, `conservation`) + gnomAD frequencies.
-- `standard` — all transcript consequences (compact key set each, scores included).
+- `compact` (default) — adds position + variant-level `position_scores` (CADD/GERP,
+  emitted once) + one prioritized `representative_transcript` (with the
+  substitution-specific scores `revel`, `am_pathogenicity`/`am_class`; null fields
+  dropped) + gnomAD frequencies.
+- `standard` — transcript consequences (each null-stripped). By default
+  (`transcripts="auto"`) uninformative MODIFIER neighbour transcripts are dropped
+  and the list is capped to the most severe, with `_meta.transcripts` reporting
+  `{shown, total}`; pass `transcripts="all"` for every isoform.
 - `full` — entire normalized annotation, including `cadd_raw`, the `*_score`
   predictor values, and colocated variants.
+
+> CADD and GERP (`conservation`) are genomic-position scores — equal across a
+> variant's transcripts — so they are hoisted once to `position_scores` rather
+> than repeated per transcript. REVEL/AlphaMissense are substitution-specific and
+> stay per transcript.
 
 See [mcp-tools.md](mcp-tools.md) for an example payload of each tier.
 

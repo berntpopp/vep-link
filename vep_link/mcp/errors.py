@@ -29,6 +29,7 @@ best-effort no-op if the API differs.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ from vep_link.exceptions import (
     VepLinkError,
 )
 from vep_link.mcp.resources import build_meta
+from vep_link.observability.metrics import METRICS
 
 logger = structlog.get_logger("vep_link.mcp.errors")
 
@@ -217,6 +219,25 @@ def _inject_upstream(envelope: dict[str, Any], ctx: McpErrorContext) -> None:
         meta.setdefault("upstream", ctx.health.meta_hint())
 
 
+def _stamp_elapsed(envelope: dict[str, Any], start: float) -> int:
+    """Overwrite ``_meta.timing.elapsed_ms`` with the measured wall-clock cost.
+
+    ``build_meta`` seeds ``timing.elapsed_ms`` to ``0`` at construction time
+    (before the body has run); this stamps the real elapsed milliseconds once the
+    body has completed, on both success and error envelopes. Returns the value.
+    """
+    elapsed_ms = max(0, int((time.perf_counter() - start) * 1000))
+    if isinstance(envelope, dict):
+        meta = envelope.get("_meta")
+        if isinstance(meta, dict):
+            timing = meta.get("timing")
+            if isinstance(timing, dict):
+                timing["elapsed_ms"] = elapsed_ms
+            else:
+                meta["timing"] = {"elapsed_ms": elapsed_ms}
+    return elapsed_ms
+
+
 def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[str, Any]:
     """Build a sanitized ``internal_error`` envelope and log the real exception.
 
@@ -263,12 +284,13 @@ async def run_mcp_tool(
     * On anything else: a sanitized ``internal_error`` envelope with a correlation
       id; the original exception text is not leaked.
     """
+    start = time.perf_counter()
     try:
         result = await body()
     except VepLinkError as exc:
         classified = _classify(exc)
         if classified is None:
-            return _internal_error_envelope(exc, ctx)
+            return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
         code, recovery = classified
         # A real upstream fault: feed the breaker and append the healthy-host
         # advice (e.g. "GRCh37 is healthy -- retry there") to the recovery.
@@ -279,17 +301,32 @@ async def run_mcp_tool(
             if advice:
                 recovery = f"{recovery} {advice}"
         message = str(exc) or type(exc).__name__
-        return mcp_tool_error(code=code, message=message, recovery=recovery, ctx=ctx)
+        envelope = mcp_tool_error(code=code, message=message, recovery=recovery, ctx=ctx)
+        return _finalize_error(envelope, ctx, start)
     except Exception as exc:  # error-boundary contract: every other fault -> internal_error
-        return _internal_error_envelope(exc, ctx)
+        return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
 
-    # Success: record a healthy outcome and stamp the live upstream hint.
+    # Success: record a healthy outcome, stamp the live upstream hint + timing,
+    # and emit the call metric.
     if ctx.health is not None:
         if ctx.assembly:
             ctx.health.record_success(ctx.assembly)
         if isinstance(result, dict):
             _inject_upstream(result, ctx)
+    elapsed_ms = _stamp_elapsed(result, start) if isinstance(result, dict) else 0
+    METRICS.record_tool_call(ctx.tool_name, outcome="success", code=None, elapsed_ms=elapsed_ms)
     return result
+
+
+def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float) -> dict[str, Any]:
+    """Stamp elapsed timing on an error envelope and record the error metric."""
+    elapsed_ms = _stamp_elapsed(envelope, start)
+    code = "internal_error"
+    error_block = envelope.get("error")
+    if isinstance(error_block, dict):
+        code = str(error_block.get("code", code))
+    METRICS.record_tool_call(ctx.tool_name, outcome="error", code=code, elapsed_ms=elapsed_ms)
+    return envelope
 
 
 def install_validation_error_handler(mcp: Any) -> None:

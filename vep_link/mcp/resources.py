@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from vep_link import __version__
@@ -155,6 +156,21 @@ _NOTES = [
         "Batch annotation is capped at 200 variants per call; larger requests "
         "must be split client-side."
     ),
+    (
+        "Token discipline: CADD and GERP (conservation) are genomic-position "
+        "scores emitted once per variant under position_scores, not repeated per "
+        "transcript; REVEL and AlphaMissense are substitution-specific and stay "
+        "per transcript. Null transcript fields are dropped. The standard tier "
+        "filters uninformative MODIFIER neighbour transcripts and caps to the most "
+        "severe by default (transcripts='all' returns every isoform; "
+        "_meta.transcripts reports shown/total when truncated)."
+    ),
+    (
+        "Operational telemetry (HTTP transport) is exposed at GET /metrics in "
+        "Prometheus format alongside GET /health: per-tool call/error counts, a "
+        "latency histogram, and per-assembly circuit-breaker state. Variant data "
+        "stays in MCP; these are ops-only endpoints."
+    ),
 ]
 
 
@@ -176,8 +192,16 @@ def server_capabilities() -> dict[str, Any]:
         "response_modes": list(_RESPONSE_MODES),
         "response_mode_tiers": {
             "minimal": "variant_id + most_severe_consequence + gene_symbol + _meta",
-            "compact": "representative (prioritized) transcript + key fields (default)",
-            "standard": "all transcript consequences, key fields each",
+            "compact": (
+                "representative (prioritized) transcript + key fields + variant-level "
+                "position_scores (CADD/GERP) + frequencies (default)"
+            ),
+            "standard": (
+                "transcript consequences (null-stripped); auto-filters uninformative "
+                "MODIFIER neighbours and caps to the most severe, with "
+                "_meta.transcripts {shown,total} when truncated. Pass transcripts='all' "
+                "for every isoform"
+            ),
             "full": "raw-ish VEP payload (all fields) + colocated variants/frequencies",
         },
         "tools": [dict(tool) for tool in _TOOLS],
@@ -229,6 +253,15 @@ def build_meta(
         **({"assembly": assembly} if assembly else {}),
         **(extra or {}),
     }
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC wall-clock time as an ISO-8601 string.
+
+    Used to stamp ``provenance.retrieved`` so a result records *when* it was
+    fetched from Ensembl rather than carrying a misleading ``null`` placeholder.
+    """
+    return datetime.now(UTC).isoformat()
 
 
 def provenance(

@@ -18,8 +18,10 @@ from __future__ import annotations
 from typing import Any
 
 from tests.conftest import StubService
+from tests.fixtures import VEP_REGION_MISSENSE
 from vep_link.exceptions import DataNotFoundError
 from vep_link.mcp.resources import server_capabilities
+from vep_link.services.extraction import build_annotation
 
 
 def structured(result: Any) -> dict[str, Any]:
@@ -140,6 +142,63 @@ async def test_annotate_variant_compact_success(facade, stub_service: StubServic
     name, kwargs = stub_service.calls[-1]
     assert name == "annotate"
     assert kwargs["vep_options"] is None
+
+
+async def test_annotate_variant_populates_observability_and_next_commands(
+    facade, stub_service: StubService
+) -> None:
+    data = structured(await facade.call_tool("annotate_variant", {"variant": "1-1000-A-T"}))
+    # P2: elapsed_ms is a real measurement, not a 0 stub; retrieved is a real ts.
+    assert isinstance(data["_meta"]["timing"]["elapsed_ms"], int)
+    assert data["_meta"]["timing"]["elapsed_ms"] >= 0
+    assert data["provenance"]["retrieved"]
+    assert "T" in data["provenance"]["retrieved"]  # ISO-8601 date/time separator
+    # P3: next_commands steer the canonical follow-ups (recode + liftover).
+    next_tools = {c["tool"] for c in data["_meta"]["next_commands"]}
+    assert "recode_variant" in next_tools
+    assert "liftover_variant" in next_tools
+
+
+async def test_annotate_variant_standard_truncation_steer(
+    facade, stub_service: StubService
+) -> None:
+    # A real 2-transcript annotation: one is an uninformative MODIFIER neighbour.
+    stub_service.annotate_return = build_annotation(
+        VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembly="GRCh38"
+    )
+    data = structured(
+        await facade.call_tool(
+            "annotate_variant", {"variant": "1-1000-A-T", "response_mode": "standard"}
+        )
+    )
+    # Default (auto) standard view shows 1 of 2 and says so in _meta.
+    assert len(data["transcript_consequences"]) == 1
+    assert data["_meta"]["transcripts"] == {"shown": 1, "total": 2}
+    # The steer offers a ready-to-call widen-to-all follow-up.
+    widen = [
+        c
+        for c in data["_meta"]["next_commands"]
+        if c["tool"] == "annotate_variant" and c["arguments"].get("transcripts") == "all"
+    ]
+    assert widen, "expected a transcripts=all widen suggestion when truncated"
+    # CADD/GERP hoisted once to the variant level, not repeated per transcript.
+    assert data["position_scores"]["cadd_phred"] == 25.1
+
+
+async def test_annotate_variant_transcripts_all_returns_every_transcript(
+    facade, stub_service: StubService
+) -> None:
+    stub_service.annotate_return = build_annotation(
+        VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembly="GRCh38"
+    )
+    data = structured(
+        await facade.call_tool(
+            "annotate_variant",
+            {"variant": "1-1000-A-T", "response_mode": "standard", "transcripts": "all"},
+        )
+    )
+    assert len(data["transcript_consequences"]) == 2
+    assert "transcripts" not in data["_meta"]
 
 
 async def test_annotate_variant_disallowed_option_is_invalid_input(facade) -> None:

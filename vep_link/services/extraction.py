@@ -20,14 +20,18 @@ __all__ = [
     "most_severe_transcript",
     "prioritize_transcript",
     "extract_gnomad_frequencies",
+    "extract_position_scores",
     "build_annotation",
 ]
 
 # Transcript-consequence fields copied verbatim into each flattened row.
-# The trailing block is the precomputed predictor / conservation scores the
-# public Ensembl REST returns for the dedicated VEP toggles (see
-# ``DEFAULT_VEP_OPTIONS``). AlphaMissense arrives as a nested object and is
-# flattened separately (see :func:`_extract_alphamissense`).
+# The trailing block is the precomputed *substitution-specific* predictor scores
+# (REVEL, AlphaMissense, SIFT, PolyPhen) -- these legitimately differ per
+# transcript and stay on the row. CADD and GERP (conservation) are genomic-
+# position values, identical across every transcript, so they are NOT here: they
+# are hoisted once to a variant-level ``position_scores`` object (see
+# :func:`extract_position_scores`). AlphaMissense arrives as a nested object and
+# is flattened separately (see :func:`_extract_alphamissense`).
 _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "gene_id",
     "gene_symbol",
@@ -45,10 +49,23 @@ _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "sift_prediction",
     "polyphen_score",
     "polyphen_prediction",
-    "cadd_phred",
-    "cadd_raw",
     "revel",
-    "conservation",
+)
+
+# Genomic-position scores hoisted to one variant-level ``position_scores`` dict
+# instead of being repeated on every transcript row. CADD (cadd_phred/cadd_raw)
+# scores a substitution at a locus; GERP (conservation) scores the position --
+# both are constant across a variant's transcripts.
+_POSITION_SCORE_FIELDS: tuple[str, ...] = ("cadd_phred", "cadd_raw", "conservation")
+
+# Consequence buckets that may carry position scores, scanned in order. Coding
+# variants populate them on ``transcript_consequences``; a purely intergenic
+# variant may only have ``intergenic_consequences``.
+_POSITION_SCORE_SOURCES: tuple[str, ...] = (
+    "transcript_consequences",
+    "intergenic_consequences",
+    "regulatory_feature_consequences",
+    "motif_feature_consequences",
 )
 
 
@@ -174,6 +191,27 @@ def extract_gnomad_frequencies(vep_record: dict[str, Any]) -> list[dict[str, Any
     return results
 
 
+def extract_position_scores(vep_record: dict[str, Any]) -> dict[str, Any]:
+    """Hoist the genomic-position scores (CADD, GERP) to one variant-level dict.
+
+    CADD (``cadd_phred``/``cadd_raw``) and GERP (``conservation``) are constant
+    across a variant's transcripts, so they are returned once here instead of
+    being duplicated on every transcript row. Scans the consequence buckets in
+    :data:`_POSITION_SCORE_SOURCES` and takes the first non-null value per score.
+    Only non-null scores are included, so the result is ``{}`` for a variant
+    without precomputed scores (e.g. a non-coding/intergenic locus). Pure.
+    """
+    scores: dict[str, Any] = {}
+    for source in _POSITION_SCORE_SOURCES:
+        for consequence in vep_record.get(source) or []:
+            for field in _POSITION_SCORE_FIELDS:
+                if field not in scores and consequence.get(field) is not None:
+                    scores[field] = consequence[field]
+            if len(scores) == len(_POSITION_SCORE_FIELDS):
+                return scores
+    return scores
+
+
 def build_annotation(
     vep_record: dict[str, Any], *, variant_id: str, assembly: str
 ) -> dict[str, Any]:
@@ -198,6 +236,7 @@ def build_annotation(
         "strand": vep_record.get("strand"),
         "most_severe_consequence": vep_record.get("most_severe_consequence"),
         "gene_symbol": gene_symbol,
+        "position_scores": extract_position_scores(vep_record),
         "transcript_consequences": transcript_rows,
         "frequencies": extract_gnomad_frequencies(vep_record),
         "colocated_variants": vep_record.get("colocated_variants", []),

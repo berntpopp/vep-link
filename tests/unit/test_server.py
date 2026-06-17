@@ -60,6 +60,22 @@ def test_mcp_app_mounted_at_mcp_path() -> None:
     assert any(path.startswith("/mcp") for path in paths), paths
 
 
+async def test_metrics_endpoint_exposes_prometheus_text() -> None:
+    app = build_app()
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    body = response.text
+    # The tool-call metric family header is always present...
+    assert "# TYPE vep_link_tool_calls_total counter" in body
+    # ...and the live per-assembly circuit-state gauge is rendered from health.
+    assert "# TYPE vep_link_circuit_state gauge" in body
+    assert 'vep_link_circuit_state{assembly="GRCh38",state="closed"}' in body
+
+
 def test_run_server_invokes_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     import vep_link.server_manager as sm
 
