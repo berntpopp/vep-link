@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Tool-Naming Standard v1 CI guard + namespace docs.** Added
+  `tests/unit/test_tool_names.py`, which lints the **live** FastMCP tool roster
+  against the GeneFoundry Tool-Naming & Normalization Standard v1: every name is
+  unprefixed snake_case `≤50` chars, does not self-prefix the gateway namespace
+  token, starts with an approved verb, and the live roster equals the
+  `get_capabilities` roster. As an action/compute server, vep-link's domain
+  action verbs (`annotate`, `recode`, `liftover`, plus the readiness verb
+  `check`) are carried as **documented exceptions** pending the fleet-wide
+  Standard v1.1 verb-canon decision (no tools are renamed). README now documents
+  the canonical gateway namespace token **`vep`** (`annotate_variant` →
+  `vep_annotate_variant` at the gateway) and the action-verb exception note.
 - **Pathogenicity & conservation scores (REVEL, AlphaMissense, CADD, GERP).** The
   public Ensembl REST serves these precomputed predictors as dedicated VEP
   toggles; vep-link now enables `REVEL`, `AlphaMissense`, and `Conservation`

@@ -56,6 +56,22 @@ variants with a short inter-chunk delay and a concurrency cap.
 | `liftover_variant` | Lift a coordinate between GRCh37 and GRCh38. |
 | `check_upstream_health` | Live Ensembl REST readiness per assembly (circuit-breaker snapshot). |
 
+### Naming & gateway namespace
+
+`serverInfo.name` is `vep-link`. Tool names are intentionally **unprefixed**
+([Tool-Naming Standard v1](../genefoundry-router/docs/TOOL-NAMING-STANDARD-v1.md));
+namespacing is the gateway's job. The canonical gateway namespace token for this
+server is **`vep`** — the GeneFoundry router mounts it as `mount(namespace="vep")`,
+so e.g. `annotate_variant` is surfaced as **`vep_annotate_variant`** at the
+gateway. A CI guard (`tests/unit/test_tool_names.py`) lints the live roster
+against the Standard.
+
+As an **action / compute** server, vep-link uses domain action verbs
+(`annotate`, `recode`, `liftover`, plus the readiness verb `check`) that are
+outside the strict v1 verb canon. These are carried as **documented exceptions**
+pending the fleet-wide Standard v1.1 verb-canon decision; per the Standard,
+action tools are not mass-renamed before that decision.
+
 ### Upstream health awareness
 
 A per-assembly circuit breaker tracks the two Ensembl REST hosts (fed by real
