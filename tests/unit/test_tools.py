@@ -336,6 +336,7 @@ async def test_liftover_variant_success(facade, stub_service: StubService) -> No
         )
     )
     assert data["lifted"] == stub_service.liftover_return["lifted"]
+    assert data["warnings"] == []  # clean lift carries an empty warnings channel
     assert data["_meta"]["tool"] == "liftover_variant"
     name, kwargs = stub_service.calls[-1]
     assert name == "liftover"

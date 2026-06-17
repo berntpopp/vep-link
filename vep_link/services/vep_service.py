@@ -49,7 +49,7 @@ from vep_link.services._recoding import (
     first_canonical_vcf_string,
 )
 from vep_link.services.extraction import build_annotation
-from vep_link.services.warnings import multiple_alts_warning
+from vep_link.services.warnings import multiple_alts_warning, ref_not_validated_warning
 from vep_link.variant import (
     cnv_to_vep_line,
     coordinate_to_vep_line,
@@ -386,6 +386,13 @@ class VepService:
         raise :class:`UnsupportedContigError`. A unique mapping yields the lifted
         coordinate; zero mappings raise :class:`DataNotFoundError` and multiple
         raise :class:`AmbiguousMappingError`.
+
+        The assembly-map endpoint is coordinate-only, so the input REF/ALT are
+        carried through unchanged -- which can be *wrong* if the reference base
+        differs between builds. When ``LIFTOVER_VALIDATE_REF`` is set, the carried
+        REF is checked against the target-assembly reference base: a match returns
+        the full ``CHR-POS-REF-ALT``; a mismatch returns coordinate-only plus a
+        ``ref_not_validated`` warning rather than a confidently-wrong allele.
         """
         vi = parse_variant_input(variant)
         if vi.kind in (InputKind.HGVS, InputKind.RSID):
@@ -414,10 +421,19 @@ class VepService:
         mapped = mappings[0]["mapped"]
         seq_region = mapped["seq_region_name"]
         start = mapped["start"]
+        lifted = f"{seq_region}-{start}-{ref}-{alt}"
+        warnings: list[dict] = []
+        if self._settings.LIFTOVER_VALIDATE_REF:
+            target_ref = await self._client.sequence_region_ref(seq_region, start, to_build)
+            if target_ref is not None and target_ref != ref.upper():
+                # The carried REF is wrong for the target build: drop the alleles.
+                lifted = f"{seq_region}-{start}"
+                warnings.append(ref_not_validated_warning(expected=target_ref, carried=ref.upper()))
         return {
             "input": vi.value,
             "from_assembly": from_build.value,
             "to_assembly": to_build.value,
-            "lifted": f"{seq_region}-{start}-{ref}-{alt}",
+            "lifted": lifted,
             "mapped_region": f"{seq_region}:{start}",
+            "warnings": warnings,
         }

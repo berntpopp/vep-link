@@ -31,6 +31,7 @@ from vep_link.config import (
     DEFAULT_VEP_OPTIONS,
     RECODER_GET_PATH,
     RECODER_POST_PATH,
+    SEQUENCE_REGION_PATH,
     VEP_HGVS_PATH,
     VEP_ID_PATH,
     VEP_REGION_PATH,
@@ -141,6 +142,21 @@ class EnsemblClient:
         url = f"{self._settings.vep_url(build)}{VEP_ID_PATH}/{quote(rsid, safe='')}"
         result: list[dict] = await self._http.get_json(url, _vep_params(options))
         return result
+
+    # -- sequence (liftover REF validation) --------------------------------
+
+    async def sequence_region_ref(self, chrom: str, pos: int, build: GenomeBuild) -> str | None:
+        """Return the single reference base at ``chrom:pos`` in ``build`` (upper).
+
+        Reads ``/sequence/region`` for a 1-bp window. ``content-type`` is forced
+        to JSON via the query param so Ensembl returns ``{"seq": ...}`` rather than
+        FASTA. Returns ``None`` when the response carries no usable ``seq``.
+        """
+        region = f"{chrom}:{pos}..{pos}"
+        url = f"{self._settings.vep_url(build)}{SEQUENCE_REGION_PATH}/{quote(region, safe='')}"
+        payload = await self._http.get_json(url, {"content-type": "application/json"})
+        seq = payload.get("seq") if isinstance(payload, dict) else None
+        return seq.upper() if isinstance(seq, str) and seq else None
 
     # -- assembly map (liftover) -------------------------------------------
 

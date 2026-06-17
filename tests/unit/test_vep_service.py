@@ -55,16 +55,20 @@ class FakeEnsemblClient:
         self.recoder_post_return: list[dict[str, Any]] = deepcopy(RECODER_POST_BATCH)
         self.vep_region_post_return: list[dict[str, Any]] = deepcopy(VEP_REGION_MISSENSE)
         self.assembly_map_return: dict[str, Any] = deepcopy(ASSEMBLY_MAP_ONE)
+        # Default None: "ref unknown" -> liftover keeps alleles (no downgrade).
+        self.sequence_region_ref_return: str | None = None
 
         self.recoder_get_error: Exception | None = None
         self.recoder_post_error: Exception | None = None
         self.vep_region_post_error: Exception | None = None
         self.assembly_map_error: Exception | None = None
+        self.sequence_region_ref_error: Exception | None = None
 
         self.recoder_get_calls: list[dict[str, Any]] = []
         self.recoder_post_calls: list[dict[str, Any]] = []
         self.vep_region_post_calls: list[dict[str, Any]] = []
         self.assembly_map_calls: list[dict[str, Any]] = []
+        self.sequence_region_ref_calls: list[dict[str, Any]] = []
 
         self.closed = False
 
@@ -107,6 +111,12 @@ class FakeEnsemblClient:
         if self.assembly_map_error:
             raise self.assembly_map_error
         return self.assembly_map_return
+
+    async def sequence_region_ref(self, chrom: str, pos: int, build: GenomeBuild) -> str | None:
+        self.sequence_region_ref_calls.append({"chrom": chrom, "pos": pos, "build": build})
+        if self.sequence_region_ref_error:
+            raise self.sequence_region_ref_error
+        return self.sequence_region_ref_return
 
     async def aclose(self) -> None:
         self.closed = True
@@ -395,6 +405,43 @@ async def test_liftover_single_mapping(service: VepService, client: FakeEnsemblC
     assert result["to_assembly"] == "GRCh38"
     assert result["input"] == "1-1000-A-T"
     assert result["mapped_region"] == "1:1064"
+    assert result["warnings"] == []
+
+
+async def test_liftover_keeps_alleles_when_ref_matches(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # Target-assembly REF equals the carried REF (A) -> full CHR-POS-REF-ALT, no warning.
+    client.sequence_region_ref_return = "A"
+    result = await service.liftover("1-1000-A-T", GRCH37, GRCH38)
+    assert result["lifted"] == "1-1064-A-T"
+    assert result["warnings"] == []
+    # The lifted locus (target build) was the one validated.
+    assert client.sequence_region_ref_calls[-1] == {"chrom": "1", "pos": 1064, "build": GRCH38}
+
+
+async def test_liftover_drops_alleles_and_warns_on_ref_mismatch(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # Target-assembly REF (C) disagrees with the carried REF (A): the alleles are
+    # unverifiable, so return coordinate-only + a ref_not_validated warning.
+    client.sequence_region_ref_return = "C"
+    result = await service.liftover("1-1000-A-T", GRCH37, GRCH38)
+    assert result["lifted"] == "1-1064"  # coordinate-only
+    assert result["warnings"][0]["code"] == "ref_not_validated"
+    assert result["warnings"][0]["context"] == {"expected_ref": "C", "carried_ref": "A"}
+
+
+async def test_liftover_skips_validation_when_disabled(
+    client: FakeEnsemblClient, settings: Settings
+) -> None:
+    no_validate = settings.model_copy(update={"LIFTOVER_VALIDATE_REF": False})
+    svc = VepService(client, no_validate)  # type: ignore[arg-type]
+    client.sequence_region_ref_return = "C"  # would mismatch, but validation is off
+    result = await svc.liftover("1-1000-A-T", GRCH37, GRCH38)
+    assert result["lifted"] == "1-1064-A-T"
+    assert result["warnings"] == []
+    assert client.sequence_region_ref_calls == []  # not even queried
 
 
 async def test_liftover_no_mapping_raises_not_found(

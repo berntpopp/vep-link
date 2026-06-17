@@ -23,6 +23,7 @@ VEP_REGION_PATH = "/vep/homo_sapiens/region"
 VEP_HGVS_PATH = "/vep/human/hgvs"
 VEP_ID_PATH = "/vep/human/id"
 ASSEMBLY_MAP_PATH = "/map/human"
+SEQUENCE_REGION_PATH = "/sequence/region/human"
 
 # VEP query profile applied by default (variant-linker's proven set + the
 # precomputed pathogenicity/conservation predictors that the public Ensembl REST
@@ -165,6 +166,12 @@ class Settings(BaseSettings):
     # (input, assembly, options) so a long TTL is safe.
     CACHE_SIZE: int = 1024
     CACHE_TTL_SECONDS: int = 86400
+
+    # Liftover. When true, the lifted REF base is validated against the target
+    # assembly reference (via /sequence/region); a mismatch downgrades the result
+    # to coordinate-only + a ``ref_not_validated`` warning instead of emitting a
+    # possibly-wrong CHR-POS-REF-ALT.
+    LIFTOVER_VALIDATE_REF: bool = True
 
     # Upstream health monitoring. A per-assembly circuit breaker (fed by real
     # call outcomes + a cheap background /info/ping probe) lets the server warn

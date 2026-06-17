@@ -115,6 +115,7 @@ class StubService:
             "from_assembly": "GRCh37",
             "to_assembly": "GRCh38",
             "lifted": "1-1064-A-T",
+            "warnings": [],
         }
         self.resolve_error: Exception | None = None
         self.annotate_error: Exception | None = None

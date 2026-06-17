@@ -309,3 +309,34 @@ async def test_injected_http_client_is_used_and_owned_by_caller(settings: Settin
 
     assert result == RECODER_GET_RS123
     assert route.called
+
+
+# --- sequence_region_ref (liftover REF validation) ------------------------
+
+
+@respx.mock
+async def test_sequence_region_ref_returns_uppercased_base(client: EnsemblClient) -> None:
+    # The /sequence/region read returns the reference base; the client uppercases it.
+    route = respx.get(url__regex=rf"{GRCH37_BASE}/sequence/region/human/.*169519049.*").mock(
+        return_value=httpx.Response(200, json={"seq": "t"})
+    )
+    try:
+        ref = await client.sequence_region_ref("1", 169519049, GenomeBuild.GRCH37)
+    finally:
+        await client.aclose()
+    assert ref == "T"
+    assert route.called
+    # JSON is forced via the content-type query param (else Ensembl returns FASTA).
+    assert route.calls.last.request.url.params["content-type"] == "application/json"
+
+
+@respx.mock
+async def test_sequence_region_ref_none_when_no_seq(client: EnsemblClient) -> None:
+    respx.get(url__regex=rf"{GRCH38_BASE}/sequence/region/human/.*").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    try:
+        ref = await client.sequence_region_ref("1", 1000, GenomeBuild.GRCH38)
+    finally:
+        await client.aclose()
+    assert ref is None
