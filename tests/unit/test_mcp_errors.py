@@ -31,10 +31,21 @@ from vep_link.exceptions import (
 from vep_link.mcp.errors import (
     ERROR_CODES,
     McpErrorContext,
+    _classify,
     install_validation_error_handler,
     mcp_tool_error,
     run_mcp_tool,
 )
+
+
+def test_local_validation_recovery_does_not_blame_ensembl() -> None:
+    # UpstreamInputError covers LOCALLY-validated failures too (e.g. same-assembly
+    # liftover). Its recovery must not claim Ensembl rejected a call it never made.
+    classified = _classify(UpstreamInputError("from_assembly and to_assembly must differ"))
+    assert classified is not None
+    code, recovery = classified
+    assert code == "invalid_input"
+    assert "Ensembl" not in recovery
 
 
 def _ctx(**kwargs: Any) -> McpErrorContext:

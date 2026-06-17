@@ -105,7 +105,11 @@ _EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str], ...] = (
     (
         UpstreamInputError,
         "invalid_input",
-        "Ensembl rejected the request; verify the input and assembly.",
+        # UpstreamInputError covers both Ensembl 4xx rejections AND local
+        # validation (same-assembly liftover, bad vep_options, oversized batch),
+        # so the recovery must stay source-neutral -- never claim Ensembl rejected
+        # a call that local validation refused before any request was made.
+        "Request rejected: verify the input format and the assembly argument.",
     ),
     (
         DataNotFoundError,
