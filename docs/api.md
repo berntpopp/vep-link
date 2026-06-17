@@ -27,7 +27,7 @@ curl http://127.0.0.1:8000/health
 ```
 
 ```json
-{"status": "healthy", "service": "vep-link", "version": "0.1.0"}
+{"status": "healthy", "service": "vep-link", "version": "0.2.0"}
 ```
 
 (Under the Docker stack the host port is **8021**:
@@ -106,6 +106,20 @@ Present on every success and error payload:
 | `retrieved` | `str \| null` | ISO-8601 UTC timestamp of when the result was fetched (populated on `annotate_variant`). |
 | `recommended_citation` | `str` | The Ensembl VEP citation (PMID:27268795); paste verbatim. |
 
+### `warnings[]` channel (v0.2)
+
+`resolve_variant`, `annotate_variant`, and `liftover_variant` carry a top-level
+`warnings` list — honest, non-fatal signals that ride alongside a successful
+result (empty when there is nothing to flag). Distinct from the error envelope,
+which owns hard failures. Each entry is `{code, message, context}`:
+
+| `code` | Raised when | `context` |
+|--------|-------------|-----------|
+| `multiple_alts` | A single input resolved to several ALT alleles (all returned in `variants[]`). | `{count, variants}` |
+| `ref_not_validated` | A lifted REF did not match the target-assembly reference base (alleles omitted; coordinate-only `lifted`). | `{expected_ref, carried_ref}` |
+
+The codes are advertised in `get_capabilities` under `warning_codes`.
+
 ## Error envelope
 
 Failures return a deterministic structured envelope. An LLM client branches on
@@ -166,7 +180,7 @@ top-level error envelope.
 
 ## Versioning
 
-- `server_version` / `/health` `version`: `0.1.0`.
+- `server_version` / `/health` `version`: `0.2.0`.
 - `mcp_protocol_version`: `2025-06-18`.
 - `capabilities_version`: a content hash that changes only when the capabilities
   contract changes; echoed into every `_meta`.
