@@ -41,6 +41,8 @@ _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "impact",
     "canonical",
     "mane",
+    "pick",
+    "mane_select",
     "hgvsc",
     "hgvsp",
     "amino_acids",

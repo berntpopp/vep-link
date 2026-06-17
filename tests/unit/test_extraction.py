@@ -123,6 +123,26 @@ def test_flatten_consequences_protein_position_only_end() -> None:
     assert flatten_consequences(record)[0]["protein_position"] == "9"
 
 
+def test_flatten_preserves_ranking_fields() -> None:
+    # pick/mane_select must survive flattening so the consequence-anchored
+    # representative selection can rank on the full signal (not just `mane`).
+    record = {
+        "transcript_consequences": [
+            {
+                "transcript_id": "ENST1",
+                "gene_symbol": "G",
+                "consequence_terms": ["x"],
+                "pick": 1,
+                "mane_select": "NM_1.1",
+                "canonical": 1,
+            },
+        ]
+    }
+    row = flatten_consequences(record)[0]
+    assert row["pick"] == 1
+    assert row["mane_select"] == "NM_1.1"
+
+
 # --- most_severe_transcript ----------------------------------------------
 
 
