@@ -22,8 +22,9 @@ dropped; and the noisy long tail of uninformative neighbour transcripts is
 truncated with an explicit, agent-readable steer rather than dumped.
 
 All functions are pure: they read from the provided dict, never mutate it, and
-perform no network or disk access. Transcript prioritization is delegated to
-:func:`vep_link.services.extraction.prioritize_transcript` to stay DRY.
+perform no network or disk access. Transcript selection is delegated to
+:func:`vep_link.services.extraction.select_representative` (consequence-anchored)
+to stay DRY.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ import copy
 from typing import Any
 
 from vep_link.models.enums import ResponseMode, impact_rank
-from vep_link.services.extraction import prioritize_transcript
+from vep_link.services.extraction import select_representative
 
 __all__ = [
     "DEFAULT_MAX_TRANSCRIPTS",
@@ -100,17 +101,19 @@ _SIGNAL_FIELDS: tuple[str, ...] = (
 _INFORMATIVE_IMPACTS: frozenset[str] = frozenset({"HIGH", "MODERATE", "LOW"})
 
 
-def pick_representative_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the single most biologically relevant transcript, or ``None``.
+def pick_representative_transcript(
+    transcripts: list[dict[str, Any]], most_severe: str | None = None
+) -> dict[str, Any] | None:
+    """Return the single most relevant transcript, or ``None``.
 
-    Priority order (mirrors ``variant-linker``): ``pick == 1`` > MANE
-    (``mane_select`` present OR ``'MANE_Select'`` in ``mane``) >
-    ``canonical == 1`` > first transcript. Returns ``None`` for an empty list.
-
-    Delegates to :func:`vep_link.services.extraction.prioritize_transcript` to
-    avoid duplicating the selection logic.
+    Consequence-anchored: when ``most_severe`` is given, the pick is filtered to
+    transcripts carrying that consequence before applying the biological ranking
+    (``pick == 1`` > MANE > ``canonical == 1`` > first); with ``most_severe`` None
+    it ranks over all. Delegates to
+    :func:`vep_link.services.extraction.select_representative` so the compact tier
+    and ``build_annotation`` share one selection path.
     """
-    return prioritize_transcript(transcripts)
+    return select_representative(transcripts, most_severe)
 
 
 def _project_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
@@ -159,7 +162,9 @@ def _identity_with_position(data: dict[str, Any]) -> dict[str, Any]:
 def _compact(data: dict[str, Any]) -> dict[str, Any]:
     """Project to the ``compact`` tier (the default)."""
     shaped = _identity_with_position(data)
-    representative = pick_representative_transcript(data.get("transcript_consequences") or [])
+    representative = pick_representative_transcript(
+        data.get("transcript_consequences") or [], data.get("most_severe_consequence")
+    )
     shaped["representative_transcript"] = (
         _project_transcript(representative) if representative is not None else None
     )

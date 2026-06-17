@@ -185,6 +185,42 @@ def test_compact_null_strips_representative() -> None:
     assert "revel" not in rep
 
 
+def test_compact_representative_carries_most_severe() -> None:
+    # Contiguous-gene locus: the canonical neighbour (TSC2) carries only a
+    # MODIFIER consequence; the worst effect (stop_gained) is on PKD1. The compact
+    # representative_transcript must describe the variant's worst effect.
+    data = {
+        "variant_id": "16-2090952-G-A",
+        "assembly": "GRCh38",
+        "most_severe_consequence": "stop_gained",
+        "gene_symbol": "PKD1",
+        "seq_region_name": "16",
+        "start": 2090952,
+        "end": 2090952,
+        "allele_string": "G/A",
+        "position_scores": {},
+        "frequencies": [],
+        "transcript_consequences": [
+            {
+                "transcript_id": "T_TSC2",
+                "gene_symbol": "TSC2",
+                "consequence_terms": ["downstream_gene_variant"],
+                "impact": "MODIFIER",
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "T_PKD1",
+                "gene_symbol": "PKD1",
+                "consequence_terms": ["stop_gained"],
+                "impact": "HIGH",
+            },
+        ],
+    }
+    shaped = shape_annotation(data, "compact")
+    assert shaped["representative_transcript"]["gene_symbol"] == "PKD1"
+    assert "stop_gained" in shaped["representative_transcript"]["consequence_terms"]
+
+
 def test_minimal_omits_position_scores() -> None:
     assert "position_scores" not in shape_annotation(DATA, ResponseMode.MINIMAL)
 
