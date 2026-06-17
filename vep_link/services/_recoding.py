@@ -66,6 +66,9 @@ def aggregate_recode_entry(entry: dict[str, Any]) -> dict[str, Any]:
                 if value not in aggregated[field]:
                     aggregated[field].append(value)
 
+    # Emit only the fields actually present (non-empty); a key mapping to [] is
+    # pure token overhead, so drop it. Mirrors the per-transcript null-stripping
+    # in the shaping layer.
     result: dict[str, Any] = {"input": entry.get("input"), "id": entry.get("id")}
-    result.update(aggregated)
+    result.update({field: values for field, values in aggregated.items() if values})
     return result

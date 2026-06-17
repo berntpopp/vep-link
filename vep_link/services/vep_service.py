@@ -283,8 +283,10 @@ class VepService:
         self, variants: tuple[str, ...], build_value: str, fields: str | None
     ) -> list[dict]:
         build = GenomeBuild(build_value)
+        # Omitting `fields` requests the recoder's FULL default set (pass "" so no
+        # field flags are sent); an explicit filter is forwarded verbatim.
         entries = await self._client.recoder_post(
-            list(variants), build, fields=fields or "vcf_string"
+            list(variants), build, fields=fields if fields is not None else ""
         )
         return [aggregate_recode_entry(entry) for entry in entries]
 

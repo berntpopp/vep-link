@@ -310,8 +310,17 @@ async def test_recode_aggregates_vcf_strings(
 
 
 async def test_recode_default_fields(service: VepService, client: FakeEnsemblClient) -> None:
+    # Omitting `fields` must request the FULL representation set, not vcf_string
+    # only: pass "" so the recoder returns its default (all fields).
     await service.recode(["rs123"], GRCH38)
-    assert client.recoder_post_calls[0]["fields"] == "vcf_string"
+    assert client.recoder_post_calls[0]["fields"] == ""
+
+
+async def test_recode_explicit_fields_passthrough(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    await service.recode(["rs123"], GRCH38, fields="hgvsg,spdi")
+    assert client.recoder_post_calls[0]["fields"] == "hgvsg,spdi"
 
 
 # --- liftover -------------------------------------------------------------
