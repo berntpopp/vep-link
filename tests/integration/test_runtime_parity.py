@@ -69,3 +69,26 @@ async def test_live_annotate_reflects_committed_shape() -> None:
     assert data["_meta"]["timing"]["elapsed_ms"] > 0, (
         "elapsed_ms == 0 -> stale pre-observability deploy"
     )
+
+    # v0.3 observability: _meta.timing carries upstream_ms + a three-state
+    # cache_status. Guards against a stale deploy masking the new contract.
+    timing = data["_meta"]["timing"]
+    assert "upstream_ms" in timing, "upstream_ms missing -> stale pre-0.3 deploy"
+    assert timing["cache_status"] in {"miss", "hit", "coalesced"}, (
+        "cache_status missing/invalid -> stale pre-0.3 deploy"
+    )
+
+
+async def test_live_meta_timing_has_v03_keys() -> None:
+    # A dedicated, focused guard for the v0.3 _meta.timing contract (separate from
+    # the broader shape check above so a regression points straight at telemetry).
+    from fastmcp import Client
+
+    async with Client(_MCP_URL) as client:
+        result = await client.call_tool(
+            "annotate_variant",
+            {"variant": "NM_033380.3:c.1871G>A", "assembly": "GRCh38"},
+        )
+    timing = _structured(result)["_meta"]["timing"]
+    assert "upstream_ms" in timing
+    assert timing["cache_status"] in {"miss", "hit", "coalesced"}
