@@ -58,10 +58,14 @@ async def test_live_annotate_reflects_committed_shape() -> None:
     first = data["variants"][0]
 
     # v0.1 token-efficiency: CADD/GERP hoisted ONCE to position_scores, never per row.
-    assert first.get("position_scores"), "position_scores missing -> stale pre-token-efficiency deploy"
+    assert first.get("position_scores"), (
+        "position_scores missing -> stale pre-token-efficiency deploy"
+    )
     for tc in first.get("transcript_consequences", []):
         assert "cadd_phred" not in tc, "CADD duplicated per transcript -> stale deploy"
         assert "conservation" not in tc, "GERP duplicated per transcript -> stale deploy"
 
     # v0.2 observability: elapsed_ms is a real measurement, not a 0 stub.
-    assert data["_meta"]["timing"]["elapsed_ms"] > 0, "elapsed_ms == 0 -> stale pre-observability deploy"
+    assert data["_meta"]["timing"]["elapsed_ms"] > 0, (
+        "elapsed_ms == 0 -> stale pre-observability deploy"
+    )
