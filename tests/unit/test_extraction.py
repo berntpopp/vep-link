@@ -123,6 +123,26 @@ def test_flatten_consequences_protein_position_only_end() -> None:
     assert flatten_consequences(record)[0]["protein_position"] == "9"
 
 
+def test_flatten_preserves_ranking_fields() -> None:
+    # pick/mane_select must survive flattening so the consequence-anchored
+    # representative selection can rank on the full signal (not just `mane`).
+    record = {
+        "transcript_consequences": [
+            {
+                "transcript_id": "ENST1",
+                "gene_symbol": "G",
+                "consequence_terms": ["x"],
+                "pick": 1,
+                "mane_select": "NM_1.1",
+                "canonical": 1,
+            },
+        ]
+    }
+    row = flatten_consequences(record)[0]
+    assert row["pick"] == 1
+    assert row["mane_select"] == "NM_1.1"
+
+
 # --- most_severe_transcript ----------------------------------------------
 
 
@@ -193,6 +213,60 @@ def test_prioritize_transcript_falls_back_to_first() -> None:
     assert chosen["transcript_id"] == "FIRST"
 
 
+# --- select_representative (consequence-anchored) ------------------------
+
+
+def test_select_representative_anchors_on_most_severe() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [
+        # Neighbour gene, canonical, but only a MODIFIER consequence.
+        {
+            "transcript_id": "T_TSC2",
+            "gene_symbol": "TSC2",
+            "consequence_terms": ["downstream_gene_variant"],
+            "canonical": 1,
+        },
+        # Queried gene, carries the most-severe consequence, not canonical.
+        {
+            "transcript_id": "T_PKD1",
+            "gene_symbol": "PKD1",
+            "consequence_terms": ["stop_gained"],
+        },
+    ]
+    chosen = select_representative(rows, "stop_gained")
+    assert chosen is not None
+    assert chosen["gene_symbol"] == "PKD1"
+
+
+def test_select_representative_prefers_mane_within_subset() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [
+        {"transcript_id": "A", "gene_symbol": "G", "consequence_terms": ["missense_variant"]},
+        {
+            "transcript_id": "B",
+            "gene_symbol": "G",
+            "consequence_terms": ["missense_variant"],
+            "mane_select": "NM_1.1",
+        },
+    ]
+    chosen = select_representative(rows, "missense_variant")
+    assert chosen is not None
+    assert chosen["transcript_id"] == "B"
+
+
+def test_select_representative_falls_back_when_no_match() -> None:
+    from vep_link.services.extraction import select_representative
+
+    rows = [{"transcript_id": "A", "gene_symbol": "G", "consequence_terms": ["x"], "canonical": 1}]
+    # most_severe absent from every row -> fall back to biological ranking over all.
+    chosen = select_representative(rows, "not_present")
+    assert chosen is not None
+    assert chosen["transcript_id"] == "A"
+    assert select_representative([], "x") is None
+
+
 # --- extract_gnomad_frequencies ------------------------------------------
 
 
@@ -241,6 +315,31 @@ def test_build_annotation_missense_gene_symbol_and_count() -> None:
     ann = build_annotation(MISSENSE, variant_id="1-1000-A-T", assembly="GRCh38")
     assert ann["gene_symbol"] == "GENE1"
     assert len(ann["transcript_consequences"]) == 2
+
+
+def test_build_annotation_gene_symbol_matches_most_severe() -> None:
+    # Contiguous-gene locus: the canonical neighbour (TSC2) carries only a
+    # MODIFIER consequence; the worst effect (stop_gained) is on PKD1. The single
+    # top-level gene_symbol must name the gene the worst consequence occurs on.
+    record = {
+        "most_severe_consequence": "stop_gained",
+        "transcript_consequences": [
+            {
+                "transcript_id": "T_TSC2",
+                "gene_symbol": "TSC2",
+                "consequence_terms": ["downstream_gene_variant"],
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "T_PKD1",
+                "gene_symbol": "PKD1",
+                "consequence_terms": ["stop_gained"],
+            },
+        ],
+    }
+    ann = build_annotation(record, variant_id="16-2090952-G-A", assembly="GRCh38")
+    assert ann["gene_symbol"] == "PKD1"
+    assert ann["most_severe_consequence"] == "stop_gained"
 
 
 def test_build_annotation_intergenic_empty_fields() -> None:

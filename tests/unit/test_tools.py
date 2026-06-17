@@ -190,7 +190,7 @@ async def test_annotate_variant_standard_truncation_steer(
     first = data["variants"][0]
     # Default (auto) standard view shows 1 of 2 and says so per-variant in-row.
     assert len(first["transcript_consequences"]) == 1
-    assert first["transcripts_summary"] == {"shown": 1, "total": 2}
+    assert first["transcripts_summary"] == {"shown": 1, "collapsed": 0, "total": 2}
     # The steer offers a ready-to-call widen-to-all follow-up in _meta.
     widen = [
         c

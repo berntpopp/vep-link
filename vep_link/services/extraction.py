@@ -19,6 +19,7 @@ __all__ = [
     "flatten_consequences",
     "most_severe_transcript",
     "prioritize_transcript",
+    "select_representative",
     "extract_gnomad_frequencies",
     "extract_position_scores",
     "build_annotation",
@@ -41,6 +42,8 @@ _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "impact",
     "canonical",
     "mane",
+    "pick",
+    "mane_select",
     "hgvsc",
     "hgvsp",
     "amino_acids",
@@ -143,13 +146,12 @@ def most_severe_transcript(vep_record: dict[str, Any]) -> dict[str, Any] | None:
     return consequences[0]
 
 
-def prioritize_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Select the most biologically relevant transcript.
+def _rank_biological(transcripts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Biological-priority pick over ``transcripts``.
 
-    Priority order (matching ``variant-linker``):
-    ``pick == 1`` > MANE (``mane_select`` present OR ``'MANE_Select'`` in
-    ``mane``) > ``canonical == 1`` > first transcript. Returns ``None`` for an
-    empty list.
+    Order (matching ``variant-linker``): ``pick == 1`` > MANE (``mane_select``
+    present OR ``'MANE_Select'`` in ``mane``) > ``canonical == 1`` > first.
+    Returns ``None`` for an empty list.
     """
     if not transcripts:
         return None
@@ -167,6 +169,37 @@ def prioritize_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] |
             return tc
 
     return transcripts[0]
+
+
+def prioritize_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Select the most biologically relevant transcript.
+
+    Priority order (matching ``variant-linker``):
+    ``pick == 1`` > MANE (``mane_select`` present OR ``'MANE_Select'`` in
+    ``mane``) > ``canonical == 1`` > first transcript. Returns ``None`` for an
+    empty list. Thin wrapper over :func:`_rank_biological`.
+    """
+    return _rank_biological(transcripts)
+
+
+def select_representative(
+    transcripts: list[dict[str, Any]], most_severe: str | None
+) -> dict[str, Any] | None:
+    """Representative transcript anchored on the most-severe consequence.
+
+    Filters to transcripts whose ``consequence_terms`` include ``most_severe``,
+    then applies the biological ranking within that subset. Falls back to ranking
+    over all transcripts when the subset is empty (or ``most_severe`` is None), so
+    the returned gene always carries the reported worst consequence when one
+    exists. Returns ``None`` for an empty list.
+    """
+    if not transcripts:
+        return None
+    if most_severe is not None:
+        subset = [tc for tc in transcripts if most_severe in (tc.get("consequence_terms") or [])]
+        if subset:
+            return _rank_biological(subset)
+    return _rank_biological(transcripts)
 
 
 def extract_gnomad_frequencies(vep_record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -218,12 +251,16 @@ def build_annotation(
     """Shape a raw VEP record into the normalized annotation dict.
 
     The returned shape is the contract consumed by the service and
-    response-shaping layers. ``gene_symbol`` is taken from the prioritized
-    transcript (see :func:`prioritize_transcript`).
+    response-shaping layers. ``gene_symbol`` is taken from the consequence-anchored
+    representative transcript (see :func:`select_representative`), so it always
+    names a gene on which ``most_severe_consequence`` occurs -- even on a
+    contiguous-gene locus where the canonical transcript is a neighbour gene.
     """
     transcript_rows = flatten_consequences(vep_record)
-    prioritized = prioritize_transcript(transcript_rows)
-    gene_symbol = prioritized.get("gene_symbol") if prioritized is not None else None
+    representative = select_representative(
+        transcript_rows, vep_record.get("most_severe_consequence")
+    )
+    gene_symbol = representative.get("gene_symbol") if representative is not None else None
 
     return {
         "variant_id": variant_id,

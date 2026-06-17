@@ -11,6 +11,7 @@ from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
     first_canonical_vcf_string,
+    project_recode_fields,
 )
 
 
@@ -79,3 +80,29 @@ def test_aggregate_omits_empty_fields() -> None:
 def test_aggregate_keeps_input_id_even_when_no_alleles() -> None:
     out = aggregate_recode_entry({"input": "x", "id": None})
     assert out == {"input": "x", "id": None}
+
+
+def test_aggregate_recode_entry_uses_input_override() -> None:
+    # The recoder POST entry's own `input` comes back null at runtime, so the
+    # caller's original query is echoed via input_override instead.
+    entry = {"input": None, "id": "rs1", "A": {"hgvsg": ["NC:g.1A>T"]}}
+    result = aggregate_recode_entry(entry, input_override="NM_1.1:c.1A>T")
+    assert result["input"] == "NM_1.1:c.1A>T"
+    assert result["id"] == "rs1"
+    assert result["hgvsg"] == ["NC:g.1A>T"]
+
+
+def test_project_recode_fields_keeps_only_requested() -> None:
+    result = {
+        "input": "x",
+        "id": "rs1",
+        "vcf_string": ["v"],
+        "hgvsg": ["g"],
+        "hgvsc": ["c"],
+        "hgvsp": ["p"],
+        "spdi": ["s"],
+    }
+    projected = project_recode_fields(result, "hgvsg,spdi,vcf_string")
+    assert set(projected) == {"input", "id", "vcf_string", "hgvsg", "spdi"}
+    # None -> unchanged (full documented set).
+    assert project_recode_fields(result, None) == result

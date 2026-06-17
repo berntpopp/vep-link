@@ -10,8 +10,9 @@ for MCP lives in a later layer. Build is always passed explicitly as a
 :class:`~vep_link.models.enums.GenomeBuild`.
 
 Caching: ``resolve``, ``annotate``, and ``recode`` are wrapped with
-``async_lru.alru_cache`` so identical calls within the TTL skip the upstream
-client entirely. Because ``alru_cache`` keys on positional/keyword arguments
+``observability.telemetry.telemetry_cache`` (an ``async_lru.alru_cache`` plus
+miss/hit/coalesced classification) so identical calls within the TTL skip the
+upstream client entirely. Because the cache keys on positional/keyword arguments
 and dicts/lists are unhashable, each cached method delegates to a private
 ``_*_impl`` taking only hashable args (``build`` as its ``.value`` string,
 options as a ``json.dumps(..., sort_keys=True)`` string, variant lists as
@@ -27,8 +28,6 @@ from __future__ import annotations
 
 import json
 
-from async_lru import alru_cache
-
 from vep_link.api.ensembl_client import EnsemblClient
 from vep_link.config import Settings
 from vep_link.exceptions import (
@@ -43,10 +42,12 @@ from vep_link.exceptions import (
     VepLinkError,
 )
 from vep_link.models.enums import GenomeBuild, InputKind
+from vep_link.observability.telemetry import telemetry_cache
 from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
     first_canonical_vcf_string,
+    project_recode_fields,
 )
 from vep_link.services.extraction import build_annotation
 from vep_link.services.warnings import multiple_alts_warning, ref_not_validated_warning
@@ -111,9 +112,9 @@ class VepService:
 
         maxsize = settings.CACHE_SIZE
         ttl = float(settings.CACHE_TTL_SECONDS)
-        self._resolve_cached = alru_cache(maxsize=maxsize, ttl=ttl)(self._resolve_impl)
-        self._annotate_cached = alru_cache(maxsize=maxsize, ttl=ttl)(self._annotate_impl)
-        self._recode_cached = alru_cache(maxsize=maxsize, ttl=ttl)(self._recode_impl)
+        self._resolve_cached = telemetry_cache(self._resolve_impl, maxsize=maxsize, ttl=ttl)
+        self._annotate_cached = telemetry_cache(self._annotate_impl, maxsize=maxsize, ttl=ttl)
+        self._recode_cached = telemetry_cache(self._recode_impl, maxsize=maxsize, ttl=ttl)
 
     async def aclose(self) -> None:
         """Close the underlying Ensembl client."""
@@ -375,7 +376,19 @@ class VepService:
         entries = await self._client.recoder_post(
             list(variants), build, fields=fields if fields is not None else ""
         )
-        return [aggregate_recode_entry(entry) for entry in entries]
+        # The recoder preserves request order and POST entries do not echo the
+        # caller's query, so map our inputs back positionally. If the upstream
+        # count diverges, fall back to the entry's own input rather than misalign.
+        aligned = len(entries) == len(variants)
+        # Enforce the `fields` filter client-side: Ensembl may ignore or only
+        # partially honor the upstream param, so project after aggregation.
+        return [
+            project_recode_fields(
+                aggregate_recode_entry(entry, input_override=variants[i] if aligned else None),
+                fields,
+            )
+            for i, entry in enumerate(entries)
+        ]
 
     # -- liftover ----------------------------------------------------------
 

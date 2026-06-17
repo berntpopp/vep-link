@@ -22,6 +22,9 @@ _NON_ALLELE_KEYS = frozenset({"input", "id", "seq_region_name"})
 # Aggregated HGVS/SPDI fields surfaced by ``recode``.
 _RECODE_FIELDS: tuple[str, ...] = ("vcf_string", "hgvsg", "hgvsc", "hgvsp", "spdi")
 
+# Always-kept identity keys, regardless of the field filter.
+_RECODE_IDENTITY_KEYS: frozenset[str] = frozenset({"input", "id"})
+
 
 def _allele_objects(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the per-allele objects on a recoder entry (skip metadata keys)."""
@@ -63,12 +66,18 @@ def first_canonical_vcf_string(payload: Any) -> str | None:
     return alts[0] if alts else None
 
 
-def aggregate_recode_entry(entry: dict[str, Any]) -> dict[str, Any]:
+def aggregate_recode_entry(
+    entry: dict[str, Any], *, input_override: str | None = None
+) -> dict[str, Any]:
     """Flatten one recoder POST entry into the ``recode`` view shape.
 
     Aggregates each HGVS/SPDI/vcf_string array across every alternate-allele
     object into a single de-duplicated (order-preserving) list, alongside the
     entry's ``input`` and ``id``.
+
+    ``input_override`` (the caller's original query) is echoed as ``input`` when
+    given, because the Variant Recoder POST response does not reliably echo it
+    (it comes back ``null`` at runtime).
     """
     aggregated: dict[str, list[str]] = {field: [] for field in _RECODE_FIELDS}
     for allele in _allele_objects(entry):
@@ -80,6 +89,25 @@ def aggregate_recode_entry(entry: dict[str, Any]) -> dict[str, Any]:
     # Emit only the fields actually present (non-empty); a key mapping to [] is
     # pure token overhead, so drop it. Mirrors the per-transcript null-stripping
     # in the shaping layer.
-    result: dict[str, Any] = {"input": entry.get("input"), "id": entry.get("id")}
+    echoed_input = input_override if input_override is not None else entry.get("input")
+    result: dict[str, Any] = {"input": echoed_input, "id": entry.get("id")}
     result.update({field: values for field, values in aggregated.items() if values})
     return result
+
+
+def project_recode_fields(result: dict[str, Any], fields: str | None) -> dict[str, Any]:
+    """Trim an aggregated recode result to the caller's requested ``fields``.
+
+    Client-side enforcement of the documented filter: Ensembl may ignore or
+    partially honor the upstream ``fields`` param, so the contract is enforced
+    here. ``input``/``id`` always survive. ``fields=None`` returns ``result``
+    unchanged (the full set).
+    """
+    if fields is None:
+        return result
+    requested = {f.strip() for f in fields.split(",") if f.strip()}
+    return {
+        key: value
+        for key, value in result.items()
+        if key in _RECODE_IDENTITY_KEYS or key in requested
+    }

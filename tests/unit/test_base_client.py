@@ -94,6 +94,39 @@ async def test_429_then_200_is_retried(client: BaseHTTPClient) -> None:
 
 
 @respx.mock
+async def test_request_records_upstream_ms(
+    client: BaseHTTPClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each attempt feeds the request-scoped upstream-time accumulator. Capture the
+    # actual record_upstream calls (a >= 0 assertion alone can't prove wiring,
+    # since the default is already 0 and respx is instant).
+    captured: list[float] = []
+    monkeypatch.setattr("vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms))
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"ok": 1}))
+    try:
+        await client.get_json(URL)
+    finally:
+        await client.aclose()
+    assert len(captured) == 1  # one attempt -> one record
+    assert captured[0] >= 0.0
+
+
+@respx.mock
+async def test_request_records_upstream_ms_per_attempt(
+    client: BaseHTTPClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Upstream time accumulates across retries: a 429 then 200 is two attempts.
+    captured: list[float] = []
+    monkeypatch.setattr("vep_link.api.base_client.record_upstream", lambda ms: captured.append(ms))
+    respx.get(URL).mock(side_effect=[httpx.Response(429), httpx.Response(200, json={"ok": True})])
+    try:
+        await client.get_json(URL)
+    finally:
+        await client.aclose()
+    assert len(captured) == 2  # one record per attempt, including the retry
+
+
+@respx.mock
 async def test_429_always_raises_rate_limited(client: BaseHTTPClient) -> None:
     route = respx.get(URL).mock(return_value=httpx.Response(429))
     try:

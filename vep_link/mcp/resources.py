@@ -165,9 +165,10 @@ _NOTES = [
         "scores emitted once per variant under position_scores, not repeated per "
         "transcript; REVEL and AlphaMissense are substitution-specific and stay "
         "per transcript. Null transcript fields are dropped. The standard tier "
-        "filters uninformative MODIFIER neighbour transcripts and caps to the most "
-        "severe by default (transcripts='all' returns every isoform; "
-        "_meta.transcripts reports shown/total when truncated)."
+        "filters uninformative MODIFIER neighbour transcripts, collapses identical-"
+        "effect isoforms, and caps to the most severe by default (transcripts='all' "
+        "returns every isoform uncollapsed; transcripts_summary reports "
+        "{shown,collapsed,total})."
     ),
     (
         "Operational telemetry (HTTP transport) is exposed at GET /metrics in "
@@ -184,6 +185,13 @@ _NOTES = [
         "liftover_variant validates the lifted reference base against the target "
         "assembly: on a mismatch it returns a coordinate-only lifted value plus a "
         "ref_not_validated warning. See warning_codes."
+    ),
+    (
+        "v0.3: gene_symbol and the compact representative_transcript are anchored on "
+        "most_severe_consequence (they always describe the variant's worst effect, even "
+        "on contiguous-gene loci). recode_variant echoes the caller's input per result "
+        "and honors the fields filter. _meta.timing now carries upstream_ms and "
+        "cache_status (miss|hit|coalesced) alongside elapsed_ms."
     ),
 ]
 
@@ -212,9 +220,10 @@ def server_capabilities() -> dict[str, Any]:
             ),
             "standard": (
                 "transcript consequences (null-stripped); auto-filters uninformative "
-                "MODIFIER neighbours and caps to the most severe, with "
-                "_meta.transcripts {shown,total} when truncated. Pass transcripts='all' "
-                "for every isoform"
+                "MODIFIER neighbours, collapses isoforms with an identical effect into "
+                "one row + equivalent_transcript_ids, and caps to the most severe, with "
+                "transcripts_summary {shown,collapsed,total}. Pass transcripts='all' "
+                "for every isoform, uncollapsed"
             ),
             "full": "raw-ish VEP payload (all fields) + colocated variants/frequencies",
         },

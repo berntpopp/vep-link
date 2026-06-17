@@ -162,6 +162,39 @@ async def test_run_mcp_tool_stamps_elapsed_ms_on_success() -> None:
     assert result["_meta"]["timing"]["elapsed_ms"] >= 0
 
 
+async def test_run_mcp_tool_stamps_timing_telemetry() -> None:
+    from vep_link.observability import telemetry as t
+
+    async def body() -> dict[str, Any]:
+        # Simulate a warm hit that issued some upstream work this request.
+        t.set_cache_status("hit")
+        t.record_upstream(5.0)
+        return {"_meta": {"timing": {"elapsed_ms": 0}}}
+
+    out = await run_mcp_tool("x", body, McpErrorContext(tool_name="x"))
+    timing = out["_meta"]["timing"]
+    assert timing["cache_status"] == "hit"
+    assert timing["upstream_ms"] == 5
+    assert "elapsed_ms" in timing
+
+
+async def test_run_mcp_tool_resets_telemetry_before_body() -> None:
+    # A prior request's leftover must not leak: run_mcp_tool resets at the start,
+    # so a body that records nothing reports the defaults (miss / 0).
+    from vep_link.observability import telemetry as t
+
+    t.set_cache_status("hit")
+    t.record_upstream(999.0)
+
+    async def body() -> dict[str, Any]:
+        return {"_meta": {"timing": {"elapsed_ms": 0}}}
+
+    out = await run_mcp_tool("x", body, McpErrorContext(tool_name="x"))
+    timing = out["_meta"]["timing"]
+    assert timing["cache_status"] == "miss"
+    assert timing["upstream_ms"] == 0
+
+
 async def test_run_mcp_tool_records_call_and_error_metrics() -> None:
     # A unique tool name keeps the process-wide singleton's counters deterministic
     # for this test (no other test records under this name).

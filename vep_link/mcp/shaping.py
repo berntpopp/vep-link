@@ -22,8 +22,9 @@ dropped; and the noisy long tail of uninformative neighbour transcripts is
 truncated with an explicit, agent-readable steer rather than dumped.
 
 All functions are pure: they read from the provided dict, never mutate it, and
-perform no network or disk access. Transcript prioritization is delegated to
-:func:`vep_link.services.extraction.prioritize_transcript` to stay DRY.
+perform no network or disk access. Transcript selection is delegated to
+:func:`vep_link.services.extraction.select_representative` (consequence-anchored)
+to stay DRY.
 """
 
 from __future__ import annotations
@@ -32,10 +33,11 @@ import copy
 from typing import Any
 
 from vep_link.models.enums import ResponseMode, impact_rank
-from vep_link.services.extraction import prioritize_transcript
+from vep_link.services.extraction import select_representative
 
 __all__ = [
     "DEFAULT_MAX_TRANSCRIPTS",
+    "collapse_identical",
     "pick_representative_transcript",
     "shape_annotation",
 ]
@@ -100,28 +102,36 @@ _SIGNAL_FIELDS: tuple[str, ...] = (
 _INFORMATIVE_IMPACTS: frozenset[str] = frozenset({"HIGH", "MODERATE", "LOW"})
 
 
-def pick_representative_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the single most biologically relevant transcript, or ``None``.
+def pick_representative_transcript(
+    transcripts: list[dict[str, Any]], most_severe: str | None = None
+) -> dict[str, Any] | None:
+    """Return the single most relevant transcript, or ``None``.
 
-    Priority order (mirrors ``variant-linker``): ``pick == 1`` > MANE
-    (``mane_select`` present OR ``'MANE_Select'`` in ``mane``) >
-    ``canonical == 1`` > first transcript. Returns ``None`` for an empty list.
-
-    Delegates to :func:`vep_link.services.extraction.prioritize_transcript` to
-    avoid duplicating the selection logic.
+    Consequence-anchored: when ``most_severe`` is given, the pick is filtered to
+    transcripts carrying that consequence before applying the biological ranking
+    (``pick == 1`` > MANE > ``canonical == 1`` > first); with ``most_severe`` None
+    it ranks over all. Delegates to
+    :func:`vep_link.services.extraction.select_representative` so the compact tier
+    and ``build_annotation`` share one selection path.
     """
-    return prioritize_transcript(transcripts)
+    return select_representative(transcripts, most_severe)
 
 
 def _project_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
-    """Project a transcript consequence to the compact key set, dropping nulls.
+    """Project a transcript to the compact key set (plus equivalent ids), drop nulls.
 
     Only keys in :data:`_TRANSCRIPT_FIELDS` with a non-``None`` value are kept, so
     an uninformative row does not pay the token cost of serializing absent fields.
+    ``equivalent_transcript_ids`` (attached by :func:`collapse_identical`) is
+    carried through explicitly so a collapsed row keeps its merged-isoform list.
     """
-    return {
+    projected = {
         field: value for field in _TRANSCRIPT_FIELDS if (value := transcript.get(field)) is not None
     }
+    equivalents = transcript.get("equivalent_transcript_ids")
+    if equivalents:
+        projected["equivalent_transcript_ids"] = equivalents
+    return projected
 
 
 def _is_informative(transcript: dict[str, Any]) -> bool:
@@ -159,7 +169,9 @@ def _identity_with_position(data: dict[str, Any]) -> dict[str, Any]:
 def _compact(data: dict[str, Any]) -> dict[str, Any]:
     """Project to the ``compact`` tier (the default)."""
     shaped = _identity_with_position(data)
-    representative = pick_representative_transcript(data.get("transcript_consequences") or [])
+    representative = pick_representative_transcript(
+        data.get("transcript_consequences") or [], data.get("most_severe_consequence")
+    )
     shaped["representative_transcript"] = (
         _project_transcript(representative) if representative is not None else None
     )
@@ -167,40 +179,95 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
     return shaped
 
 
+# Fields whose equality defines an identical effect (everything projected except
+# the transcript identity itself). Collapsing rows equal on ALL of these is
+# loss-free: any difference in hgvsc/protein_position/etc. keeps the rows split.
+_COLLAPSE_SIGNATURE_FIELDS: tuple[str, ...] = tuple(
+    f for f in _TRANSCRIPT_FIELDS if f != "transcript_id"
+)
+
+
+def _signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    """Hashable identical-effect key built from the projected view of ``row``."""
+    projected = _project_transcript(row)
+    out: list[Any] = []
+    for field in _COLLAPSE_SIGNATURE_FIELDS:
+        value = projected.get(field)
+        out.append(tuple(value) if isinstance(value, list) else value)
+    return tuple(out)
+
+
+def collapse_identical(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Merge transcripts with an identical projected effect, order-preserving.
+
+    Operates on FLATTENED rows (which carry pick/mane_select/canonical), groups by
+    :func:`_signature`, keeps the biological-priority member of each group as the
+    representative with the others listed under ``equivalent_transcript_ids``
+    (omitted for singletons), and returns ``(representative_flattened_rows,
+    merged_count)`` where ``merged_count`` is the number of isoforms folded away.
+    """
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    order: list[tuple[Any, ...]] = []
+    for row in rows:
+        key = _signature(row)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    out: list[dict[str, Any]] = []
+    merged = 0
+    for key in order:
+        members = groups[key]
+        rep = pick_representative_transcript(members) or members[0]
+        others = [m["transcript_id"] for m in members if m is not rep and m.get("transcript_id")]
+        rep_row = dict(rep)
+        if others:
+            rep_row["equivalent_transcript_ids"] = others
+            merged += len(others)
+        out.append(rep_row)
+    return out, merged
+
+
 def _select_transcripts(
     data: dict[str, Any], *, transcripts: str, max_transcripts: int
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> tuple[list[dict[str, Any]], int, int, int]:
     """Choose + project the transcript rows for the ``standard`` tier.
 
-    Returns ``(projected_rows, shown, total)`` where ``total`` is the number of
-    transcripts the variant actually has. With ``transcripts="all"`` every
-    transcript is kept in upstream order; otherwise uninformative neighbours are
+    Returns ``(projected_rows, shown, collapsed, total)`` where ``total`` is the
+    number of transcripts the variant actually has and ``collapsed`` counts the
+    isoforms folded into a shown row. With ``transcripts="all"`` every transcript
+    is kept in upstream order, uncollapsed; otherwise uninformative neighbours are
     dropped (falling back to the full set if that would empty the list), the
-    remainder is ordered most-severe first, and the top ``max_transcripts`` kept.
+    remainder is ordered most-severe first, isoforms with an identical effect are
+    collapsed (loss-free), and the top ``max_transcripts`` kept.
     """
     all_tcs = data.get("transcript_consequences") or []
     total = len(all_tcs)
     if transcripts == "all":
-        chosen = list(all_tcs)
-    else:
-        informative = [tc for tc in all_tcs if _is_informative(tc)]
-        pool = informative or list(all_tcs)
-        pool = sorted(pool, key=lambda tc: impact_rank(tc.get("impact") or ""), reverse=True)
-        chosen = pool[:max_transcripts]
+        rows = [_project_transcript(tc) for tc in all_tcs]
+        return rows, len(rows), 0, total
+    informative = [tc for tc in all_tcs if _is_informative(tc)]
+    pool = informative or list(all_tcs)
+    pool = sorted(pool, key=lambda tc: impact_rank(tc.get("impact") or ""), reverse=True)
+    collapsed_rows, _merged = collapse_identical(pool)
+    chosen = collapsed_rows[:max_transcripts]
     rows = [_project_transcript(tc) for tc in chosen]
-    return rows, len(chosen), total
+    # Count only the isoforms folded into the rows actually shown (post-cap).
+    kept_merged = sum(len(tc.get("equivalent_transcript_ids") or []) for tc in chosen)
+    return rows, len(chosen), kept_merged, total
 
 
 def _standard(data: dict[str, Any], *, transcripts: str, max_transcripts: int) -> dict[str, Any]:
-    """Project to the ``standard`` tier: filtered/capped, null-stripped transcripts."""
+    """Project to the ``standard`` tier: filtered/capped/collapsed transcripts."""
     shaped = _identity_with_position(data)
-    rows, shown, total = _select_transcripts(
+    rows, shown, collapsed, total = _select_transcripts(
         data, transcripts=transcripts, max_transcripts=max_transcripts
     )
     shaped["transcript_consequences"] = rows
-    if shown < total:
-        # Steer the agent: it is seeing a filtered/capped view, not everything.
-        shaped["transcripts_summary"] = {"shown": shown, "total": total}
+    if shown < total or collapsed:
+        # Steer the agent: it is seeing a filtered/capped/collapsed view.
+        shaped["transcripts_summary"] = {"shown": shown, "collapsed": collapsed, "total": total}
     shaped["frequencies"] = data.get("frequencies", [])
     return shaped
 

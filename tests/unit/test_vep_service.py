@@ -392,6 +392,44 @@ async def test_recode_explicit_fields_passthrough(
     assert client.recoder_post_calls[0]["fields"] == "hgvsg,spdi"
 
 
+async def test_recode_echoes_inputs_in_order(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # The live recoder POST returns input=None per entry; map the caller's inputs
+    # back positionally (request order is preserved upstream).
+    client.recoder_post_return = [
+        {"input": None, "A": {"hgvsg": ["g.1"]}},
+        {"input": None, "A": {"hgvsg": ["g.2"]}},
+    ]
+    out = await service.recode(["NM_1.1:c.1A>T", "rs2"], GRCH38)
+    assert [r["input"] for r in out] == ["NM_1.1:c.1A>T", "rs2"]
+
+
+async def test_recode_fields_filter_projects_output(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # The default rs123 entry carries hgvsg + vcf_string; an explicit fields
+    # filter must trim the OUTPUT to only those keys (+ identity), not just
+    # forward the param upstream.
+    client.recoder_post_return = [
+        {"input": "rs123", "id": "rs123", "A": {"hgvsg": ["g"], "vcf_string": ["1-1-A-T"]}}
+    ]
+    out = await service.recode(["rs123"], GRCH38, fields="hgvsg")
+    assert set(out[0]) == {"input", "id", "hgvsg"}
+    assert "vcf_string" not in out[0]
+
+
+async def test_recode_count_mismatch_falls_back_to_entry_input(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # If upstream returns a different number of entries than requested, do not
+    # misalign: fall back to each entry's own input rather than guess.
+    client.recoder_post_return = [{"input": "echoed", "A": {"hgvsg": ["g.1"]}}]
+    out = await service.recode(["q1", "q2"], GRCH38)
+    assert len(out) == 1
+    assert out[0]["input"] == "echoed"
+
+
 # --- liftover -------------------------------------------------------------
 
 
@@ -484,6 +522,19 @@ async def test_resolve_is_cached(service: VepService, client: FakeEnsemblClient)
     assert first == second
     # Second identical call must be served from cache (client untouched).
     assert len(client.vep_region_post_calls) == 1
+
+
+async def test_resolve_sets_cache_status_hit_on_repeat(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    from vep_link.observability import telemetry as t
+
+    t.reset()
+    await service.resolve("1-1000-A-T", GRCH38)
+    assert t.get_cache_status() == "miss"
+    t.reset()
+    await service.resolve("1-1000-A-T", GRCH38)
+    assert t.get_cache_status() == "hit"
 
 
 async def test_annotate_is_cached(service: VepService, client: FakeEnsemblClient) -> None:
