@@ -77,16 +77,30 @@ class StubService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.resolve_return: dict[str, Any] = {
-            "variant_id": "1-1000-A-T",
+            "query": "1-1000-A-T",
             "assembly": "GRCh38",
-            "gene_symbol": "GENE1",
-            "most_severe_consequence": "missense_variant",
+            "variants": [
+                {
+                    "variant_id": "1-1000-A-T",
+                    "assembly": "GRCh38",
+                    "gene_symbol": "GENE1",
+                    "most_severe_consequence": "missense_variant",
+                }
+            ],
+            "warnings": [],
         }
         self.annotate_return: dict[str, Any] = {
-            "variant_id": "1-1000-A-T",
+            "query": "1-1000-A-T",
             "assembly": "GRCh38",
-            "most_severe_consequence": "missense_variant",
-            "transcript_consequences": [],
+            "variants": [
+                {
+                    "variant_id": "1-1000-A-T",
+                    "assembly": "GRCh38",
+                    "most_severe_consequence": "missense_variant",
+                    "transcript_consequences": [],
+                }
+            ],
+            "warnings": [],
         }
         self.batch_return: dict[str, Any] = {
             "results": [],
@@ -108,17 +122,27 @@ class StubService:
         self.recode_error: Exception | None = None
         self.liftover_error: Exception | None = None
 
-    async def resolve(self, variant: str, build: Any) -> dict[str, Any]:
-        self.calls.append(("resolve", {"variant": variant, "build": build}))
+    async def resolve(
+        self, variant: str, build: Any, *, allele: str | None = None
+    ) -> dict[str, Any]:
+        self.calls.append(("resolve", {"variant": variant, "build": build, "allele": allele}))
         if self.resolve_error:
             raise self.resolve_error
         return self.resolve_return
 
     async def annotate(
-        self, variant: str, build: Any, *, vep_options: dict[str, str] | None = None
+        self,
+        variant: str,
+        build: Any,
+        *,
+        vep_options: dict[str, str] | None = None,
+        allele: str | None = None,
     ) -> dict[str, Any]:
         self.calls.append(
-            ("annotate", {"variant": variant, "build": build, "vep_options": vep_options})
+            (
+                "annotate",
+                {"variant": variant, "build": build, "vep_options": vep_options, "allele": allele},
+            )
         )
         if self.annotate_error:
             raise self.annotate_error

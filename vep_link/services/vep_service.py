@@ -45,9 +45,11 @@ from vep_link.exceptions import (
 from vep_link.models.enums import GenomeBuild, InputKind
 from vep_link.services._recoding import (
     aggregate_recode_entry,
+    canonical_vcf_strings,
     first_canonical_vcf_string,
 )
 from vep_link.services.extraction import build_annotation
+from vep_link.services.warnings import multiple_alts_warning
 from vep_link.variant import (
     cnv_to_vep_line,
     coordinate_to_vep_line,
@@ -75,6 +77,25 @@ def _batch_error_code(exc: VepLinkError) -> str:
         if isinstance(exc, exc_type):
             return code
     return "internal_error"
+
+
+def _allele_matches(canonical: str, allele: str) -> bool:
+    """Whether ``canonical`` (CHR-POS-REF-ALT) matches an ALT filter.
+
+    ``allele`` may be a full ``CHR-POS-REF-ALT`` string or just the ALT base
+    (e.g. ``"A"``); the latter matches on the trailing allele field.
+    """
+    return allele == canonical or canonical.rsplit("-", 1)[-1] == allele
+
+
+def _alt_warnings(pairs: list[tuple[str, str]]) -> list[dict]:
+    """Build the shared ``warnings`` list for a resolved pair set.
+
+    A ``multiple_alts`` warning when an input expanded to >1 ALT allele, else [].
+    """
+    if len(pairs) <= 1:
+        return []
+    return [multiple_alts_warning([canonical for canonical, _ in pairs])]
 
 
 class VepService:
@@ -127,24 +148,72 @@ class VepService:
         # Defensive: parse_variant_input only emits the four kinds above.
         raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
 
+    async def _canonical_lines(
+        self, variant: str, build: GenomeBuild, allele: str | None
+    ) -> list[tuple[str, str]]:
+        """All ``(canonical_id, vep_line)`` pairs for an input.
+
+        Coordinates/CNVs yield exactly one pair. A recoded rsID/HGVS yields one
+        pair *per distinct ALT allele* (deterministically sorted), so a
+        multi-allelic input is never silently collapsed to a single alt. When
+        ``allele`` is given (an ALT base or full ``CHR-POS-REF-ALT``), the pairs
+        are filtered to it. Raises :class:`DataNotFoundError` when nothing
+        resolves (or nothing matches ``allele``).
+        """
+        vi = parse_variant_input(variant)
+        if vi.kind is InputKind.COORDINATE:
+            pairs = [(vi.value, coordinate_to_vep_line(vi.value))]
+        elif vi.kind is InputKind.CNV:
+            pairs = [(vi.value, cnv_to_vep_line(vi.value))]
+        elif needs_recoding(vi):
+            payload = await self._client.recoder_get(vi.value, build)
+            canonicals = canonical_vcf_strings(payload)
+            if not canonicals:
+                raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
+            pairs = [(c, coordinate_to_vep_line(c)) for c in canonicals]
+        else:  # defensive: parse_variant_input only emits the four kinds above.
+            raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
+
+        if allele is not None:
+            pairs = [pair for pair in pairs if _allele_matches(pair[0], allele)]
+            if not pairs:
+                raise DataNotFoundError(f"No ALT allele matching {allele!r} for {variant!r}")
+        return pairs
+
     # -- resolve -----------------------------------------------------------
 
-    async def resolve(self, variant: str, build: GenomeBuild) -> dict:
-        """Resolve a variant to a minimal annotation summary (cached)."""
-        return await self._resolve_cached(variant, build.value)
+    async def resolve(self, variant: str, build: GenomeBuild, *, allele: str | None = None) -> dict:
+        """Resolve a variant to one minimal summary per ALT allele (cached)."""
+        return await self._resolve_cached(variant, build.value, allele)
 
-    async def _resolve_impl(self, variant: str, build_value: str) -> dict:
+    async def _resolve_impl(self, variant: str, build_value: str, allele: str | None) -> dict:
         build = GenomeBuild(build_value)
-        canonical, vep_line = await self._to_canonical(variant, build)
-        records = await self._client.vep_region_post([vep_line], build)
-        if not records:
-            raise DataNotFoundError(f"No VEP annotation found for {canonical!r}")
-        annotation = build_annotation(records[0], variant_id=canonical, assembly=build.value)
+        pairs = await self._canonical_lines(variant, build, allele)
+        records = await self._client.vep_region_post([line for _, line in pairs], build)
+        by_line: dict[str, dict] = {
+            line: rec for rec in records if isinstance((line := rec.get("input")), str)
+        }
+        variants: list[dict] = []
+        for canonical, line in pairs:
+            record = by_line.get(line)
+            if record is None:
+                continue
+            ann = build_annotation(record, variant_id=canonical, assembly=build.value)
+            variants.append(
+                {
+                    "variant_id": ann["variant_id"],
+                    "assembly": ann["assembly"],
+                    "gene_symbol": ann["gene_symbol"],
+                    "most_severe_consequence": ann["most_severe_consequence"],
+                }
+            )
+        if not variants:
+            raise DataNotFoundError(f"No VEP annotation found for {variant!r}")
         return {
-            "variant_id": annotation["variant_id"],
-            "assembly": annotation["assembly"],
-            "gene_symbol": annotation["gene_symbol"],
-            "most_severe_consequence": annotation["most_severe_consequence"],
+            "query": variant,
+            "assembly": build.value,
+            "variants": variants,
+            "warnings": _alt_warnings(pairs),
         }
 
     # -- annotate ----------------------------------------------------------
@@ -155,20 +224,38 @@ class VepService:
         build: GenomeBuild,
         *,
         vep_options: dict[str, str] | None = None,
+        allele: str | None = None,
     ) -> dict:
-        """Return the full normalized annotation for a single variant (cached)."""
+        """Return the full normalized annotation, one entry per ALT allele (cached)."""
         options_key = json.dumps(vep_options or {}, sort_keys=True)
-        return await self._annotate_cached(variant, build.value, options_key)
+        return await self._annotate_cached(variant, build.value, options_key, allele)
 
-    async def _annotate_impl(self, variant: str, build_value: str, options_key: str) -> dict:
+    async def _annotate_impl(
+        self, variant: str, build_value: str, options_key: str, allele: str | None
+    ) -> dict:
         build = GenomeBuild(build_value)
         parsed: dict[str, str] = json.loads(options_key)
         options = parsed or None
-        canonical, vep_line = await self._to_canonical(variant, build)
-        records = await self._client.vep_region_post([vep_line], build, options=options)
-        if not records:
-            raise DataNotFoundError(f"No VEP annotation found for {canonical!r}")
-        return build_annotation(records[0], variant_id=canonical, assembly=build.value)
+        pairs = await self._canonical_lines(variant, build, allele)
+        records = await self._client.vep_region_post(
+            [line for _, line in pairs], build, options=options
+        )
+        by_line: dict[str, dict] = {
+            line: rec for rec in records if isinstance((line := rec.get("input")), str)
+        }
+        variants = [
+            build_annotation(by_line[line], variant_id=canonical, assembly=build.value)
+            for canonical, line in pairs
+            if line in by_line
+        ]
+        if not variants:
+            raise DataNotFoundError(f"No VEP annotation found for {variant!r}")
+        return {
+            "query": variant,
+            "assembly": build.value,
+            "variants": variants,
+            "warnings": _alt_warnings(pairs),
+        }
 
     # -- annotate_batch ----------------------------------------------------
 

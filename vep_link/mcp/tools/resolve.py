@@ -53,21 +53,35 @@ def register_resolve_tools(
             Literal["GRCh38", "GRCh37"],
             Field(description="Reference build for resolution. GRCh38 default."),
         ] = "GRCh38",
+        allele: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional ALT filter for a multi-allelic input: an ALT base "
+                    "(e.g. 'A') or a full CHR-POS-REF-ALT. Omit to return every ALT "
+                    "allele in variants[]."
+                ),
+            ),
+        ] = None,
     ) -> dict[str, Any]:
-        """Use this when the caller's variant is an rsID, HGVS, SPDI, or loosely formatted, and you need the canonical CHR-POS-REF-ALT plus gene_symbol and most_severe_consequence that the annotation tools build on. Coordinates are normalized locally; rsIDs/HGVS are recoded via Ensembl. Cheap (<1kB). Then call annotate_variant for the full VEP annotation."""
+        """Use this when the caller's variant is an rsID, HGVS, SPDI, or loosely formatted, and you need the canonical CHR-POS-REF-ALT plus gene_symbol and most_severe_consequence that the annotation tools build on. Returns a variants[] list (one entry per ALT allele; a multi-allelic input also carries a multiple_alts warning) plus a top-level warnings[]. Coordinates are normalized locally; rsIDs/HGVS are recoded via Ensembl. Cheap (<1kB). Then call annotate_variant for the full VEP annotation."""
 
         health = health_factory() if health_factory else None
 
         async def call() -> dict[str, Any]:
             ensure_upstream_available(health, assembly)
             service = service_factory()
-            result: dict[str, Any] = await service.resolve(variant, GenomeBuild(assembly))
+            result: dict[str, Any] = await service.resolve(
+                variant, GenomeBuild(assembly), allele=allele
+            )
+            first = result["variants"][0]["variant_id"] if result.get("variants") else variant
             result["_meta"] = build_meta(
                 tool="resolve_variant",
                 request_id=new_request_id(),
                 assembly=assembly,
                 next_commands=[
-                    next_command("annotate_variant", {"variant": variant, "assembly": assembly}),
+                    next_command("annotate_variant", {"variant": first, "assembly": assembly}),
                 ],
             )
             return result

@@ -79,10 +79,13 @@ def test_capabilities_payload_matches_server_capabilities() -> None:
 
 async def test_resolve_variant_success(facade, stub_service: StubService) -> None:
     data = structured(await facade.call_tool("resolve_variant", {"variant": "rs6025"}))
-    # Returns the stub's resolve_return fields.
-    assert data["variant_id"] == stub_service.resolve_return["variant_id"]
-    assert data["gene_symbol"] == stub_service.resolve_return["gene_symbol"]
-    assert data["most_severe_consequence"] == "missense_variant"
+    # Returns the stub's resolve_return in the new variants[] shape.
+    expected = stub_service.resolve_return["variants"][0]
+    first = data["variants"][0]
+    assert first["variant_id"] == expected["variant_id"]
+    assert first["gene_symbol"] == expected["gene_symbol"]
+    assert first["most_severe_consequence"] == "missense_variant"
+    assert data["warnings"] == []
     # _meta carries the safety flag and a next_command toward annotate_variant.
     assert data["_meta"]["unsafe_for_clinical_use"] is True
     next_tools = {c["tool"] for c in data["_meta"]["next_commands"]}
@@ -132,9 +135,12 @@ async def test_recode_variant_passes_fields(facade, stub_service: StubService) -
 
 async def test_annotate_variant_compact_success(facade, stub_service: StubService) -> None:
     data = structured(await facade.call_tool("annotate_variant", {"variant": "1-1000-A-T"}))
-    # Shaped to compact: identity + position + representative_transcript + freqs.
-    assert data["variant_id"] == "1-1000-A-T"
-    assert "representative_transcript" in data
+    # variants[] of one; each entry shaped to compact (representative_transcript).
+    assert data["query"] == "1-1000-A-T"
+    assert data["warnings"] == []
+    first = data["variants"][0]
+    assert first["variant_id"] == "1-1000-A-T"
+    assert "representative_transcript" in first
     # Annotation results carry provenance + a _meta with the capabilities hash.
     assert data["provenance"]["data_source"]
     assert data["provenance"]["endpoint"].endswith("/vep/homo_sapiens/region")
@@ -159,22 +165,33 @@ async def test_annotate_variant_populates_observability_and_next_commands(
     assert "liftover_variant" in next_tools
 
 
+def _annotate_return_one(variant_id: str = "1-1000-A-T") -> dict[str, Any]:
+    """Wrap a real fixture annotation in the service's variants[] envelope."""
+    return {
+        "query": variant_id,
+        "assembly": "GRCh38",
+        "variants": [
+            build_annotation(VEP_REGION_MISSENSE[0], variant_id=variant_id, assembly="GRCh38")
+        ],
+        "warnings": [],
+    }
+
+
 async def test_annotate_variant_standard_truncation_steer(
     facade, stub_service: StubService
 ) -> None:
     # A real 2-transcript annotation: one is an uninformative MODIFIER neighbour.
-    stub_service.annotate_return = build_annotation(
-        VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembly="GRCh38"
-    )
+    stub_service.annotate_return = _annotate_return_one()
     data = structured(
         await facade.call_tool(
             "annotate_variant", {"variant": "1-1000-A-T", "response_mode": "standard"}
         )
     )
-    # Default (auto) standard view shows 1 of 2 and says so in _meta.
-    assert len(data["transcript_consequences"]) == 1
-    assert data["_meta"]["transcripts"] == {"shown": 1, "total": 2}
-    # The steer offers a ready-to-call widen-to-all follow-up.
+    first = data["variants"][0]
+    # Default (auto) standard view shows 1 of 2 and says so per-variant in-row.
+    assert len(first["transcript_consequences"]) == 1
+    assert first["transcripts_summary"] == {"shown": 1, "total": 2}
+    # The steer offers a ready-to-call widen-to-all follow-up in _meta.
     widen = [
         c
         for c in data["_meta"]["next_commands"]
@@ -182,23 +199,56 @@ async def test_annotate_variant_standard_truncation_steer(
     ]
     assert widen, "expected a transcripts=all widen suggestion when truncated"
     # CADD/GERP hoisted once to the variant level, not repeated per transcript.
-    assert data["position_scores"]["cadd_phred"] == 25.1
+    assert first["position_scores"]["cadd_phred"] == 25.1
 
 
 async def test_annotate_variant_transcripts_all_returns_every_transcript(
     facade, stub_service: StubService
 ) -> None:
-    stub_service.annotate_return = build_annotation(
-        VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembly="GRCh38"
-    )
+    stub_service.annotate_return = _annotate_return_one()
     data = structured(
         await facade.call_tool(
             "annotate_variant",
             {"variant": "1-1000-A-T", "response_mode": "standard", "transcripts": "all"},
         )
     )
-    assert len(data["transcript_consequences"]) == 2
-    assert "transcripts" not in data["_meta"]
+    first = data["variants"][0]
+    assert len(first["transcript_consequences"]) == 2
+    assert "transcripts_summary" not in first
+
+
+async def test_annotate_variant_multi_alt_carries_warning(
+    facade, stub_service: StubService
+) -> None:
+    # A multi-allelic service result flows through as variants[] + warnings[].
+    stub_service.annotate_return = {
+        "query": "rs6025",
+        "assembly": "GRCh38",
+        "variants": [
+            build_annotation(
+                VEP_REGION_MISSENSE[0], variant_id="1-169549811-C-A", assembly="GRCh38"
+            ),
+            build_annotation(
+                VEP_REGION_MISSENSE[0], variant_id="1-169549811-C-T", assembly="GRCh38"
+            ),
+        ],
+        "warnings": [
+            {
+                "code": "multiple_alts",
+                "message": "Input maps to 2 ALT alleles; all are returned in variants[].",
+                "context": {"count": 2, "variants": ["1-169549811-C-A", "1-169549811-C-T"]},
+            }
+        ],
+    }
+    data = structured(await facade.call_tool("annotate_variant", {"variant": "rs6025"}))
+    assert [v["variant_id"] for v in data["variants"]] == ["1-169549811-C-A", "1-169549811-C-T"]
+    assert data["warnings"][0]["code"] == "multiple_alts"
+
+
+async def test_annotate_variant_forwards_allele(facade, stub_service: StubService) -> None:
+    await facade.call_tool("annotate_variant", {"variant": "rs6025", "allele": "T"})
+    _, kwargs = stub_service.calls[-1]
+    assert kwargs["allele"] == "T"
 
 
 async def test_annotate_variant_disallowed_option_is_invalid_input(facade) -> None:

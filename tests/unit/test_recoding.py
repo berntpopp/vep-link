@@ -7,7 +7,50 @@ Recoder replies (per-allele objects keyed by ALT letter).
 
 from __future__ import annotations
 
-from vep_link.services._recoding import aggregate_recode_entry
+from vep_link.services._recoding import (
+    aggregate_recode_entry,
+    canonical_vcf_strings,
+    first_canonical_vcf_string,
+)
+
+
+def test_canonical_vcf_strings_returns_sorted_distinct_alts() -> None:
+    # A multi-allelic recoder reply yields every distinct canonical alt, sorted
+    # deterministically (so a multi-allelic input resolves identically each call).
+    payload = [
+        {
+            "input": "rs6025",
+            "id": "rs6025",
+            "T": {"vcf_string": ["1-169549811-C-T"]},
+            "A": {"vcf_string": ["1-169549811-C-A"]},
+        }
+    ]
+    assert canonical_vcf_strings(payload) == ["1-169549811-C-A", "1-169549811-C-T"]
+
+
+def test_canonical_vcf_strings_dedups_and_ignores_non_canonical() -> None:
+    payload = [
+        {
+            "A": {"vcf_string": ["1-100-C-A", "1-100-C-A", "not-a-vcf"]},
+            "B": {"vcf_string": ["1-100-C-A"]},
+        }
+    ]
+    assert canonical_vcf_strings(payload) == ["1-100-C-A"]
+
+
+def test_canonical_vcf_strings_empty_when_none() -> None:
+    assert canonical_vcf_strings([{"input": "x", "A": {"hgvsg": []}}]) == []
+    assert canonical_vcf_strings("not-a-list") == []
+
+
+def test_first_canonical_delegates_to_sorted_first() -> None:
+    payload = [{"T": {"vcf_string": ["1-100-C-T"]}, "A": {"vcf_string": ["1-100-C-A"]}}]
+    # Deterministic: the alphabetically-first canonical, not dict-iteration order.
+    assert first_canonical_vcf_string(payload) == "1-100-C-A"
+
+
+def test_first_canonical_none_when_empty() -> None:
+    assert first_canonical_vcf_string([]) is None
 
 
 def test_aggregate_omits_empty_fields() -> None:

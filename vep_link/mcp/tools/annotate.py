@@ -142,11 +142,22 @@ def register_annotate_tools(
                 description=(
                     "standard-tier only: 'auto' (default) drops uninformative "
                     "MODIFIER neighbour transcripts and caps to the most severe; "
-                    "'all' returns every transcript. See _meta.transcripts for the "
-                    "shown/total count when truncated."
+                    "'all' returns every transcript. Each variant carries its own "
+                    "transcripts_summary {shown,total} when truncated."
                 ),
             ),
         ] = "auto",
+        allele: Annotated[
+            str | None,
+            Field(
+                default=None,
+                description=(
+                    "Optional ALT filter for a multi-allelic input: an ALT base "
+                    "(e.g. 'A') or a full CHR-POS-REF-ALT. Omit to annotate every "
+                    "ALT allele (each as an entry in variants[])."
+                ),
+            ),
+        ] = None,
         vep_options: Annotated[
             dict[str, str] | None,
             Field(
@@ -167,14 +178,22 @@ def register_annotate_tools(
             validate_vep_options(vep_options)
             ensure_upstream_available(health, assembly)
             service = service_factory()
-            result = await service.annotate(variant, GenomeBuild(assembly), vep_options=vep_options)
-            shaped = shape_annotation(result, response_mode, transcripts=transcripts)
-            # Promote the standard-tier truncation summary into _meta so the steer
-            # rides with the response metadata rather than the data body.
-            summary = shaped.pop("transcripts_summary", None)
-            canonical_id = shaped.get("variant_id") or result.get("variant_id")
+            result = await service.annotate(
+                variant, GenomeBuild(assembly), vep_options=vep_options, allele=allele
+            )
+            # One shaped projection per ALT allele; each keeps its own
+            # transcripts_summary in-row (a single _meta cannot speak for N variants).
+            shaped_variants = [
+                shape_annotation(ann, response_mode, transcripts=transcripts)
+                for ann in result["variants"]
+            ]
+            first_id = result["variants"][0]["variant_id"] if result.get("variants") else None
+            truncated = any("transcripts_summary" in v for v in shaped_variants)
             payload: dict[str, Any] = {
-                **shaped,
+                "query": result["query"],
+                "assembly": assembly,
+                "variants": shaped_variants,
+                "warnings": result["warnings"],
                 "provenance": provenance(
                     assembly=assembly,
                     endpoint=_vep_region_endpoint(assembly),
@@ -184,10 +203,7 @@ def register_annotate_tools(
                     tool="annotate_variant",
                     request_id=new_request_id(),
                     assembly=assembly,
-                    next_commands=_annotate_next_commands(
-                        canonical_id, assembly, truncated=summary is not None
-                    ),
-                    extra={"transcripts": summary} if summary else None,
+                    next_commands=_annotate_next_commands(first_id, assembly, truncated=truncated),
                 ),
             }
             note = spliceai_dbnsfp_note(vep_options)

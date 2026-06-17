@@ -32,24 +32,35 @@ def _allele_objects(entry: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def first_canonical_vcf_string(payload: Any) -> str | None:
-    """Find the first canonical ``CHR-POS-REF-ALT`` across a recoder GET reply.
+def canonical_vcf_strings(payload: Any) -> list[str]:
+    """All distinct canonical ``CHR-POS-REF-ALT`` strings in a recoder GET reply.
 
     The recoder GET endpoint returns a *list*; each element carries one object
-    per alternate allele. We scan alleles in order and return the first
-    ``vcf_string[0]`` that matches the canonical genomic pattern, or ``None`` if
-    nothing valid is present.
+    per alternate allele. Every ``vcf_string`` matching the canonical genomic
+    pattern is collected, de-duplicated, and **sorted deterministically** so a
+    multi-allelic input resolves to the same ordered alt set on every call (which
+    also removes batch non-determinism). Returns ``[]`` when none are present.
     """
-    if not isinstance(payload, list):
-        return None
-    for entry in payload:
-        if not isinstance(entry, dict):
-            continue
-        for allele in _allele_objects(entry):
-            for candidate in allele.get("vcf_string") or []:
-                if isinstance(candidate, str) and _VCF_STRING_RE.match(candidate):
-                    return candidate
-    return None
+    found: set[str] = set()
+    if isinstance(payload, list):
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            for allele in _allele_objects(entry):
+                for candidate in allele.get("vcf_string") or []:
+                    if isinstance(candidate, str) and _VCF_STRING_RE.match(candidate):
+                        found.add(candidate)
+    return sorted(found)
+
+
+def first_canonical_vcf_string(payload: Any) -> str | None:
+    """First canonical alt of a recoder reply (deterministic); ``None`` if none.
+
+    Delegates to :func:`canonical_vcf_strings` and returns its first element, so
+    the single-alt callers (batch canonicalization) pick a stable, sorted alt.
+    """
+    alts = canonical_vcf_strings(payload)
+    return alts[0] if alts else None
 
 
 def aggregate_recode_entry(entry: dict[str, Any]) -> dict[str, Any]:

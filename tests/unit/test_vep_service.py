@@ -125,24 +125,77 @@ def service(client: FakeEnsemblClient, settings: Settings) -> VepService:
 # --- resolve --------------------------------------------------------------
 
 
+def _vep_record(line: str, gene: str = "GENE1") -> dict[str, Any]:
+    """A minimal VEP region record echoing ``line`` as its ``input``."""
+    return {
+        "input": line,
+        "seq_region_name": "1",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {"gene_symbol": gene, "consequence_terms": ["missense_variant"], "canonical": 1}
+        ],
+    }
+
+
 async def test_resolve_rsid_recodes_then_veps_and_returns_minimal_dict(
     service: VepService, client: FakeEnsemblClient
 ) -> None:
+    # A single-alt rsID -> a variants[] of length 1, no warning.
+    client.recoder_get_return = [
+        {"id": "rs123", "input": "rs123", "A": {"vcf_string": ["1-1000-A-T"]}}
+    ]
     result = await service.resolve("rs123", GRCH38)
 
     # rsID requires recoding before VEP.
     assert len(client.recoder_get_calls) == 1
     assert client.recoder_get_calls[0]["variant"] == "rs123"
-    assert len(client.vep_region_post_calls) == 1
-    # Canonical coordinate derived from the first valid vcf_string.
     assert client.vep_region_post_calls[0]["lines"] == ["1 1000 . A T . . ."]
-
     assert result == {
-        "variant_id": "1-1000-A-T",
+        "query": "rs123",
         "assembly": "GRCh38",
-        "gene_symbol": "GENE1",
-        "most_severe_consequence": "missense_variant",
+        "variants": [
+            {
+                "variant_id": "1-1000-A-T",
+                "assembly": "GRCh38",
+                "gene_symbol": "GENE1",
+                "most_severe_consequence": "missense_variant",
+            }
+        ],
+        "warnings": [],
     }
+
+
+async def test_resolve_returns_all_alts_with_warning(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # The default rs123 fixture is bi-allelic (alts G and T); both are returned,
+    # deterministically sorted, with a multiple_alts warning.
+    client.vep_region_post_return = [
+        _vep_record("1 1000 . A G . . ."),
+        _vep_record("1 1000 . A T . . ."),
+    ]
+    out = await service.resolve("rs123", GRCH38)
+    assert out["query"] == "rs123"
+    assert [v["variant_id"] for v in out["variants"]] == ["1-1000-A-G", "1-1000-A-T"]
+    assert out["warnings"][0]["code"] == "multiple_alts"
+    assert out["warnings"][0]["context"]["count"] == 2
+
+
+async def test_resolve_allele_filter_selects_one_alt(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.vep_region_post_return = [_vep_record("1 1000 . A T . . .")]
+    out = await service.resolve("rs123", GRCH38, allele="T")
+    assert [v["variant_id"] for v in out["variants"]] == ["1-1000-A-T"]
+    assert out["warnings"] == []  # filtered to a single alt -> no ambiguity
+    assert client.vep_region_post_calls[-1]["lines"] == ["1 1000 . A T . . ."]
+
+
+async def test_resolve_allele_filter_no_match_raises(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    with pytest.raises(DataNotFoundError):
+        await service.resolve("rs123", GRCH38, allele="C")
 
 
 async def test_resolve_coordinate_skips_recoder(
@@ -153,8 +206,10 @@ async def test_resolve_coordinate_skips_recoder(
     assert client.recoder_get_calls == []  # coordinate is already canonical
     assert len(client.vep_region_post_calls) == 1
     assert client.vep_region_post_calls[0]["lines"] == ["1 1000 . A T . . ."]
-    assert result["variant_id"] == "1-1000-A-T"
-    assert result["gene_symbol"] == "GENE1"
+    assert result["query"] == "1-1000-A-T"
+    assert result["variants"][0]["variant_id"] == "1-1000-A-T"
+    assert result["variants"][0]["gene_symbol"] == "GENE1"
+    assert result["warnings"] == []
 
 
 async def test_resolve_empty_vep_raises_not_found(
@@ -182,14 +237,18 @@ async def test_annotate_returns_full_normalized_dict(
 ) -> None:
     result = await service.annotate("1-1000-A-T", GRCH38)
 
-    assert result["variant_id"] == "1-1000-A-T"
+    assert result["query"] == "1-1000-A-T"
     assert result["assembly"] == "GRCh38"
-    assert result["most_severe_consequence"] == "missense_variant"
-    assert result["gene_symbol"] == "GENE1"
+    assert result["warnings"] == []
+    v = result["variants"][0]
+    assert v["variant_id"] == "1-1000-A-T"
+    assert v["assembly"] == "GRCh38"
+    assert v["most_severe_consequence"] == "missense_variant"
+    assert v["gene_symbol"] == "GENE1"
     # Full shape carries both transcript rows.
-    assert len(result["transcript_consequences"]) == 2
-    assert result["transcript_consequences"][0]["transcript_id"] == "ENST00000123456"
-    assert result["frequencies"]  # gnomAD frequencies flattened
+    assert len(v["transcript_consequences"]) == 2
+    assert v["transcript_consequences"][0]["transcript_id"] == "ENST00000123456"
+    assert v["frequencies"]  # gnomAD frequencies flattened
 
 
 async def test_annotate_forwards_vep_options(
