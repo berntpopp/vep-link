@@ -44,6 +44,11 @@ def _no_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
     """
     if request.node.get_closest_marker("allow_network"):
         return
+    # The vendored MCP conformance probe (tests/conformance/) is a LIVE integration test
+    # against a running container, gated by CONFORMANCE_MCP_URL (skipped otherwise). It must
+    # reach the local server over a real socket, so it is exempt from the network block.
+    if "tests/conformance" in request.node.nodeid.replace("\\", "/"):
+        return
     monkeypatch.setattr(socket, "getaddrinfo", _blocked_network)
     monkeypatch.setattr(socket, "create_connection", _blocked_network)
 

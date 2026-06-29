@@ -137,7 +137,12 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        return {"status": "healthy", "service": "vep-link", "version": __version__}
+        return {
+            "status": "healthy",
+            "service": "vep-link",
+            "version": __version__,
+            "transport": "streamable-http-stateless",
+        }
 
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> PlainTextResponse:
