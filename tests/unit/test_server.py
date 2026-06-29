@@ -47,11 +47,12 @@ async def test_health_endpoint() -> None:
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "healthy",
-        "service": "vep-link",
-        "version": __version__,
-    }
+    body = response.json()
+    # MCP Transport Standard v1: /health MUST carry status, version, transport.
+    assert body["status"] == "healthy"
+    assert body["version"] == __version__
+    assert body["transport"] == "streamable-http-stateless"
+    assert body["service"] == "vep-link"
 
 
 def test_mcp_app_mounted_at_root_with_baked_path() -> None:
