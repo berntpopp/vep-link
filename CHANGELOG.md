@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Adopted the GeneFoundry Container & Deployment Hardening Standard v1.** Added
+  a `docker/docker-compose.prod.yml` hardening overlay (read-only rootfs +
+  explicit writable tmpfs, `cap_drop: ALL`, `no-new-privileges`, `init`, and
+  memory/CPU/PID limits; expose-only with `ports: !reset []`), digest-pinned the
+  `python:3.14-slim` base image, added a `container-security` CI workflow (Trivy
+  scan failing on fixable HIGH/CRITICAL + CycloneDX SBOM artifact), and fixed the
+  CORS middleware to never pair wildcard origins with `allow_credentials=True`.
+
 ### Added
 
 - **Tool-Naming Standard v1 CI guard + namespace docs.** Added

@@ -7,4 +7,4 @@ grch37.rest.ensembl.org). Research use only; not for clinical decision support.
 
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
