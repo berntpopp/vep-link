@@ -158,9 +158,14 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
         service_factory=lambda: app.state.vep_service,
         health_factory=lambda: app.state.upstream_health,
     )
-    mcp_app = mcp.http_app(path="/", stateless_http=True, json_response=True)
+    # Bake the MCP path into the FastMCP HTTP app's own routes and mount it at
+    # the project root. Mounting the sub-app under a prefix (e.g. "/mcp") would
+    # make Starlette redirect ``POST /mcp`` -> ``/mcp/`` (HTTP 307); baking the
+    # path in means ``POST /mcp`` is served directly with no redirect, matching
+    # the rest of the -link fleet (cf. gtex-link's UnifiedServerManager).
+    mcp_app = mcp.http_app(path=cfg.mcp_path, stateless_http=True, json_response=True)
     _compose_lifespan(app, mcp_app)
-    app.mount(cfg.mcp_path, mcp_app)
+    app.mount("/", mcp_app)
 
     return app
 

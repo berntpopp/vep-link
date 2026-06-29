@@ -54,10 +54,61 @@ async def test_health_endpoint() -> None:
     }
 
 
-def test_mcp_app_mounted_at_mcp_path() -> None:
+def test_mcp_app_mounted_at_root_with_baked_path() -> None:
+    """The MCP sub-app is mounted at ``/`` with the MCP path baked into its own
+    routes, so ``POST /mcp`` is served directly (no 307 redirect to ``/mcp/``),
+    matching the rest of the -link fleet. The host's own routes (/health,
+    /metrics) are registered before the catch-all mount and keep precedence.
+    """
+    from starlette.routing import Mount
+
     app = build_app()
-    paths = [getattr(route, "path", "") for route in app.routes]
-    assert any(path.startswith("/mcp") for path in paths), paths
+    top_paths = [getattr(route, "path", "") for route in app.routes]
+    # Host routes precede the catch-all mount so they keep routing precedence.
+    assert "/health" in top_paths
+    assert "/metrics" in top_paths
+    mounts = [route for route in app.routes if isinstance(route, Mount)]
+    assert mounts, top_paths
+    mount = mounts[-1]
+    # The MCP sub-app is mounted at the project root ("/" normalises to "").
+    assert mount.path == ""
+    assert top_paths.index("/health") < top_paths.index(mount.path)
+    # ...and the MCP path is baked into the mounted sub-app's own routes.
+    sub_paths = [getattr(route, "path", "") for route in mount.app.routes]
+    assert any(path.startswith("/mcp") for path in sub_paths), sub_paths
+
+
+async def test_post_mcp_is_not_redirected() -> None:
+    """Regression: ``POST /mcp`` must be served directly (HTTP 200), not 307.
+
+    Mounting the FastMCP sub-app under a ``/mcp`` prefix made Starlette redirect
+    ``POST /mcp`` -> ``/mcp/`` (307); baking the path into the sub-app and
+    mounting at ``/`` fixes that and matches the rest of the fleet.
+    """
+    app = build_app()
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "s", "version": "1"},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/mcp",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                json=payload,
+            )
+    assert response.status_code != 307
+    assert response.status_code == 200
 
 
 async def test_metrics_endpoint_exposes_prometheus_text() -> None:
