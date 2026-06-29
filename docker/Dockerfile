@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for vep-link.
 
 # --- Builder Stage ---
-FROM python:3.14-slim AS builder
+FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -29,7 +29,7 @@ RUN pip install --upgrade pip uv && \
     uv sync --frozen --no-dev --active --no-install-project
 
 # --- Production Stage ---
-FROM python:3.14-slim AS production
+FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

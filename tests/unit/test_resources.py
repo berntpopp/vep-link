@@ -182,8 +182,8 @@ def test_server_capabilities_identity_fields() -> None:
     assert caps["disclaimer"] == RESEARCH_USE_NOTICE
 
 
-def test_server_version_is_0_3_0() -> None:
-    assert server_capabilities()["server_version"] == "0.3.0"
+def test_server_version_is_0_3_1() -> None:
+    assert server_capabilities()["server_version"] == "0.3.1"
 
 
 def test_standard_tier_doc_mentions_collapsed() -> None:

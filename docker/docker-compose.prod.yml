@@ -1,0 +1,54 @@
+# Production hardening overlay for vep-link (GeneFoundry Container &
+# Deployment Hardening Standard v1).
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+#
+# Layered on the base compose: drops the published host port (expose-only behind
+# the reverse proxy), makes the root filesystem read-only with explicit writable
+# tmpfs mounts, drops all kernel capabilities, blocks privilege escalation, and
+# bounds memory/CPU/PIDs. vep-link is a stateless live-Ensembl passthrough, so
+# the only writable paths are the scratch tmpfs and the HTTP cache dir.
+services:
+  vep-link:
+    environment:
+      VEP_LINK_LOG_LEVEL: INFO
+      VEP_LINK_LOG_FORMAT: json
+    # Expose-only behind the reverse proxy. !reset (not []) is required: Compose
+    # MERGES list fields across -f overlays, so a plain `ports: []` would NOT drop
+    # the base file's published "${VEP_LINK_HOST_PORT:-8021}:8000" mapping.
+    ports: !reset []
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      # TMPDIR=/tmp/vep-link and the app's HTTP cache dir (both created in the
+      # image), writable on the otherwise read-only rootfs.
+      - /tmp/vep-link:rw,noexec,nosuid,size=64m,mode=1777
+      - /var/cache/vep-link:rw,noexec,nosuid,size=128m,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    init: true
+    restart: on-failure
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+          pids: 256
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+        labels: "service=vep-link,environment=production"
