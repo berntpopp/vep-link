@@ -2,15 +2,20 @@
 
 These drive the six vep-link tools the way an MCP client does -- via
 ``facade.call_tool(name, arguments)`` -- and assert the contract each tool
-promises: the success payload (shaped to the requested response_mode), the
-``_meta`` block stamped on every response, the ``provenance`` block on
-annotation results, and the deterministic error envelope our error module
-RETURNS (not raises) when the service faults.
+promises: the success payload (shaped to the requested response_mode, with a
+top-level ``success: true``), the ``_meta`` block stamped on every response,
+the ``provenance`` block on annotation results, and the FLAT Response-Envelope
+Standard v1 error frame (``success: false``, ``error_code``, ...) our error
+module builds when the service faults.
 
 Note: unlike spliceailookup (which raises ``ToolError`` for failures), our
-``vep_link.mcp.errors.run_mcp_tool`` RETURNS the structured error envelope as the
-tool's normal dict result, so both success and error payloads are pulled out the
-same way via :func:`structured`.
+``vep_link.mcp.errors.run_mcp_tool`` RETURNS the structured envelope as the
+tool's normal result (a dict on success, a ``ToolResult`` with ``is_error=True``
+on failure), so both success and error payloads are pulled out the same way via
+:func:`structured` (which reads ``.structured_content`` off the
+:class:`fastmcp.tools.ToolResult` FastMCP always wraps a tool result in). The
+``isError`` wire flag itself is asserted directly on a couple of representative
+error-path tests below.
 """
 
 from __future__ import annotations
@@ -78,7 +83,11 @@ def test_capabilities_payload_matches_server_capabilities() -> None:
 
 
 async def test_resolve_variant_success(facade, stub_service: StubService) -> None:
-    data = structured(await facade.call_tool("resolve_variant", {"variant": "rs6025"}))
+    result = await facade.call_tool("resolve_variant", {"variant": "rs6025"})
+    assert result.is_error is False
+    data = structured(result)
+    # Response-Envelope Standard v1: every success carries a top-level success: true.
+    assert data["success"] is True
     # Returns the stub's resolve_return in the new variants[] shape.
     expected = stub_service.resolve_return["variants"][0]
     first = data["variants"][0]
@@ -252,13 +261,14 @@ async def test_annotate_variant_forwards_allele(facade, stub_service: StubServic
 
 
 async def test_annotate_variant_disallowed_option_is_invalid_input(facade) -> None:
-    data = structured(
-        await facade.call_tool(
-            "annotate_variant", {"variant": "1-1000-A-T", "vep_options": {"BOGUS": "1"}}
-        )
+    result = await facade.call_tool(
+        "annotate_variant", {"variant": "1-1000-A-T", "vep_options": {"BOGUS": "1"}}
     )
-    assert data["error"]["code"] == "invalid_input"
-    assert data["error"]["fallback_tool"] == "get_capabilities"
+    assert result.is_error is True
+    data = structured(result)
+    assert data["success"] is False
+    assert data["error_code"] == "invalid_input"
+    assert data["fallback_tool"] == "get_capabilities"
 
 
 async def test_annotate_variant_spliceai_note(facade, stub_service: StubService) -> None:
@@ -316,7 +326,7 @@ async def test_annotate_variants_batch_disallowed_option_is_invalid_input(facade
             {"variants": ["1-1000-A-T"], "vep_options": {"BOGUS": "1"}},
         )
     )
-    assert data["error"]["code"] == "invalid_input"
+    assert data["error_code"] == "invalid_input"
 
 
 # ---------------------------------------------------------------------------
@@ -345,17 +355,17 @@ async def test_liftover_variant_success(facade, stub_service: StubService) -> No
 
 
 async def test_liftover_variant_same_assembly_is_invalid_input(facade) -> None:
-    data = structured(
-        await facade.call_tool(
-            "liftover_variant",
-            {
-                "variant": "1-1000-A-T",
-                "from_assembly": "GRCh38",
-                "to_assembly": "GRCh38",
-            },
-        )
+    result = await facade.call_tool(
+        "liftover_variant",
+        {
+            "variant": "1-1000-A-T",
+            "from_assembly": "GRCh38",
+            "to_assembly": "GRCh38",
+        },
     )
-    assert data["error"]["code"] == "invalid_input"
+    assert result.is_error is True
+    data = structured(result)
+    assert data["error_code"] == "invalid_input"
 
 
 # ---------------------------------------------------------------------------
@@ -368,8 +378,8 @@ async def test_resolve_not_found_maps_to_not_found_envelope(
 ) -> None:
     stub_service.resolve_error = DataNotFoundError("x")
     data = structured(await facade.call_tool("resolve_variant", {"variant": "rsbad"}))
-    assert data["error"]["code"] == "not_found"
-    assert data["error"]["fallback_tool"] == "get_capabilities"
+    assert data["error_code"] == "not_found"
+    assert data["fallback_tool"] == "get_capabilities"
 
 
 # ---------------------------------------------------------------------------

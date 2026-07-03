@@ -76,10 +76,14 @@ MCP HTTP app runs in stateless JSON-response mode.
 
 ## Tool response envelopes
 
-Every tool returns a JSON object. On success the payload is the tool's data plus
-a `_meta` block (and, for `annotate_variant`, a `provenance` block). On failure
-the payload is the structured error envelope below. Tools do **not** raise to the
-client — `run_mcp_tool` converts any exception into an error envelope.
+vep-link implements the ratified GeneFoundry **Response-Envelope Standard v1**
+(flat banner). Every tool returns a JSON object. On success the payload is the
+tool's data plus a top-level `success: true` and a `_meta` block (and, for
+`annotate_variant`, a `provenance` block). On failure the payload is the FLAT
+structured error frame below, with `success: false`. Tools do **not** raise to
+the client — `run_mcp_tool` converts any exception into an error frame, wrapped
+in an MCP `ToolResult` with `is_error: true` so the failure also sets the
+MCP-native `isError` wire flag alongside the in-band frame.
 
 ### `_meta` envelope fields
 
@@ -122,34 +126,47 @@ The codes are advertised in `get_capabilities` under `warning_codes`.
 
 ## Error envelope
 
-Failures return a deterministic structured envelope. An LLM client branches on
-`error.code` (stable per exception class) rather than scraping `message`:
+Failures return a deterministic, FLAT structured frame — never a nested
+`error: {...}` block. An LLM client branches on the top-level `error_code`
+(stable per exception class) rather than scraping `message`:
 
 ```json
 {
-  "error": {
-    "code": "<error_code>",
-    "message": "<human message>",
-    "recovery": "<how to recover>",
-    "fallback_tool": "get_capabilities",
-    "next_commands": [{"tool": "...", "arguments": {}}]
-  },
+  "success": false,
+  "error_code": "<error_code>",
+  "message": "<human message>",
+  "retryable": false,
+  "recovery_action": "<retry_backoff | reformulate_input | switch_tool>",
+  "recovery": "<how to recover, in prose>",
+  "fallback_tool": "get_capabilities",
   "_meta": {
     "tool": "<tool>",
     "request_id": "<id>",
     "timing": {"elapsed_ms": 21},
     "capabilities_version": "<hash>",
     "unsafe_for_clinical_use": true,
-    "next_commands": [],
+    "next_commands": [{"tool": "...", "arguments": {}}],
     "assembly": "<assembly, if any>"
   }
 }
 ```
 
-`fallback_tool` is always `get_capabilities` — the always-readable tool a confused
-client can fall back to. `internal_error` envelopes carry a sanitized message: the
-original exception text is never surfaced; a fresh correlation id is embedded in
-the message and logged server-side so an operator can join the two.
+Retryable codes (`rate_limited`, `upstream_unavailable`, `upstream_timeout`)
+additionally carry a top-level `retry_after_s` backoff hint. `recovery_action`
+is a closed enum an LLM can branch on directly instead of inferring behavior
+from the bare `retryable` bool: `retry_backoff` (wait, then retry the identical
+call — always paired with `retryable: true`), `reformulate_input` (fix the
+variant/argument, same tool), or `switch_tool` (call `fallback_tool` — always
+`get_capabilities`, the always-readable tool a confused client can fall back
+to — or the resolver named in `recovery`, then retry).
+
+The frame above is also carried as `structuredContent` on an MCP tool result
+with `isError: true` (MCP-native), so a client sees both the protocol-level
+error signal and this actionable in-band frame.
+
+`internal_error` envelopes carry a sanitized message: the original exception
+text is never surfaced; a fresh correlation id is embedded in the message and
+logged server-side so an operator can join the two.
 
 ### Error codes
 
@@ -176,11 +193,11 @@ These ten codes are surfaced verbatim in the `get_capabilities` payload
 `{"input": "...", "error_code": "...", "message": "..."}`, where `error_code` is
 `invalid_input` (parse failure) or `not_found` (no genomic coordinate / no VEP
 record). Batch-level failures (e.g. >200 variants, rate limiting) still return the
-top-level error envelope.
+top-level error frame.
 
 ## Versioning
 
-- `server_version` / `/health` `version`: `0.2.0`.
+- `server_version` / `/health` `version`: `1.0.0` (see `CHANGELOG.md`).
 - `mcp_protocol_version`: `2025-06-18`.
 - `capabilities_version`: a content hash that changes only when the capabilities
   contract changes; echoed into every `_meta`.

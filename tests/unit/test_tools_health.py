@@ -44,14 +44,15 @@ async def test_fail_fast_when_circuit_open() -> None:
         health.record_failure("GRCh38")  # trip GRCh38 open
     facade = _facade_with_health(stub, health)
 
-    data = structured(
-        await facade.call_tool("annotate_variant", {"variant": "rs6025", "assembly": "GRCh38"})
-    )
-    assert data["error"]["code"] == "upstream_unavailable"
-    assert data["error"]["retryable"] is True
-    assert data["error"]["retry_after_s"] > 0
+    result = await facade.call_tool("annotate_variant", {"variant": "rs6025", "assembly": "GRCh38"})
+    assert result.is_error is True
+    data = structured(result)
+    assert data["error_code"] == "upstream_unavailable"
+    assert data["retryable"] is True
+    assert data["recovery_action"] == "retry_backoff"
+    assert data["retry_after_s"] > 0
     # The recovery should name the healthy fallback host.
-    assert "GRCh37" in data["error"]["recovery"]
+    assert "GRCh37" in data["recovery"]
     # The service was never called (fail-fast before the upstream attempt).
     assert not any(c[0] == "annotate" for c in stub.calls)
     # _meta.upstream reflects the degraded GRCh38.
@@ -67,8 +68,8 @@ async def test_retryable_error_records_failure_and_enriches() -> None:
     data = structured(
         await facade.call_tool("annotate_variant", {"variant": "1-1000-A-T", "assembly": "GRCh38"})
     )
-    assert data["error"]["code"] == "upstream_unavailable"
-    assert data["error"]["retryable"] is True
+    assert data["error_code"] == "upstream_unavailable"
+    assert data["retryable"] is True
     # The breaker counted the real upstream failure.
     assert health._host("GRCh38").consecutive_failures == 1
 
@@ -81,8 +82,9 @@ async def test_non_upstream_error_not_retryable() -> None:
     health = UpstreamHealth(Settings())
     facade = _facade_with_health(stub, health)
     data = structured(await facade.call_tool("resolve_variant", {"variant": "rs0"}))
-    assert data["error"]["code"] == "not_found"
-    assert data["error"]["retryable"] is False
+    assert data["error_code"] == "not_found"
+    assert data["retryable"] is False
+    assert data["recovery_action"] == "switch_tool"
     # A not_found is not an upstream fault, so the breaker is untouched.
     assert health._host("GRCh38").consecutive_failures == 0
 

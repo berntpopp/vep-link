@@ -1,15 +1,28 @@
 """Structured MCP error envelopes for vep-link.
 
-The envelope shape is what an LLM client branches on, so codes are deterministic
-per exception class: a prompt can recover (retry, switch tool, reformulate input)
-without scraping free text. Every top-level tool body runs inside
-:func:`run_mcp_tool`, which converts any raised exception into the canonical
-envelope built by :func:`mcp_tool_error`.
+Implements the ratified **GeneFoundry Response-Envelope Standard v1** (flat
+banner; see ``docs/RESPONSE-ENVELOPE-STANDARD-v1.md`` in genefoundry-router) at
+this backend's sole MCP error boundary, :func:`run_mcp_tool`:
 
-Mapping is centralized here (mirroring the ``vep_link.exceptions`` docstrings):
+* **Success**: the tool body's dict is returned with a top-level ``success:
+  true`` injected (its own keys and ``_meta`` are otherwise untouched).
+* **Failure**: a FLAT in-band frame -- ``{"success": false, "error_code",
+  "message", "retryable", "recovery_action", "_meta": {...}}`` -- built by
+  :func:`mcp_tool_error`. There is no nested ``error: {...}`` block (OQ4 of the
+  ratified standard: the flat contract is the v1 shape; the nested draft was
+  deferred to a non-normative v2 appendix). The frame is returned wrapped in a
+  :class:`fastmcp.tools.ToolResult` with ``is_error=True`` so the failure ALSO
+  sets the MCP-native ``CallToolResult.isError`` wire flag (REQUIRED by v1 §2),
+  verified against the installed ``fastmcp==3.4.2``: a tool function returning a
+  ``ToolResult`` instance is passed through unchanged by ``Tool.convert_result``
+  (``fastmcp/tools/base.py``), and ``ToolResult(structured_content=...,
+  is_error=True)`` round-trips to ``CallToolResult.isError``.
+
+The error-code -> recovery mapping is centralized here (mirroring the
+``vep_link.exceptions`` docstrings):
 
 * Known :class:`~vep_link.exceptions.VepLinkError` subclasses map to a stable
-  ``error.code`` + a recovery hint. Subclass specificity matters --
+  ``error_code`` + a recovery hint. Subclass specificity matters --
   :class:`~vep_link.exceptions.UnsupportedContigError` subclasses
   :class:`~vep_link.exceptions.VariantParseError`, so it is checked FIRST and
   classifies as ``unsupported_input`` rather than ``invalid_input``.
@@ -21,10 +34,10 @@ Mapping is centralized here (mirroring the ``vep_link.exceptions`` docstrings):
 
 ``install_validation_error_handler`` adapts the spliceailookup pattern to the
 FastMCP build in use: it wraps each registered tool's ``run`` so a FastMCP /
-pydantic argument-validation failure returns a structured ``invalid_input``
-envelope instead of an opaque framework error. The FastMCP internals are probed
-defensively (and fastmcp is imported lazily) so the function is import-safe and a
-best-effort no-op if the API differs.
+pydantic argument-validation failure returns the same flat ``invalid_input``
+envelope (also wrapped in an ``is_error=True`` ``ToolResult``) instead of an
+opaque framework error. The FastMCP internals are probed defensively so the
+function is import-safe and a best-effort no-op if the API differs.
 """
 
 from __future__ import annotations
@@ -36,6 +49,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from fastmcp.tools import ToolResult
 
 if TYPE_CHECKING:
     from vep_link.api.health import UpstreamHealth
@@ -87,8 +101,17 @@ _FALLBACK_TOOL = "get_capabilities"
 _RETRYABLE_CODES: frozenset[str] = frozenset(
     {"rate_limited", "upstream_unavailable", "upstream_timeout"}
 )
-# Default backoff hint surfaced as ``error.retry_after_s`` for retryable faults.
+# Default backoff hint surfaced as the top-level ``retry_after_s`` for retryable faults.
 _DEFAULT_RETRY_AFTER_S = 10
+
+# Error codes where the same call will never succeed unchanged -- the client
+# must alter its arguments, not retry or switch tools. Feeds
+# ``recovery_action``'s "reformulate_input" bucket alongside the retryable set's
+# "retry_backoff" bucket; every other code defaults to "switch_tool" (typically
+# ``get_capabilities`` or a resolver named in ``recovery``).
+_REFORMULATE_CODES: frozenset[str] = frozenset(
+    {"invalid_input", "unsupported_input", "build_mismatch", "ambiguous"}
+)
 
 # Recovery text for the internal_error fallthrough; every mapped exception resolves
 # its own recovery from ``_EXCEPTION_MAP`` below.
@@ -177,6 +200,22 @@ def _classify(exc: BaseException) -> tuple[str, str] | None:
     return None
 
 
+def _recovery_action(code: str, retryable: bool) -> str:
+    """Return the closed-enum ``recovery_action`` for a classified error code.
+
+    Action-typed guidance so an LLM does not have to infer behavior from a bare
+    ``retryable`` bool or free-text ``recovery``: ``retry_backoff`` (wait, then
+    retry the identical call) | ``reformulate_input`` (fix the variant/argument,
+    same tool) | ``switch_tool`` (call ``fallback_tool`` -- typically
+    ``get_capabilities`` or a resolver named in ``recovery`` -- then retry).
+    """
+    if retryable:
+        return "retry_backoff"
+    if code in _REFORMULATE_CODES:
+        return "reformulate_input"
+    return "switch_tool"
+
+
 def mcp_tool_error(
     *,
     code: str,
@@ -186,37 +225,42 @@ def mcp_tool_error(
     request_id: str | None = None,
     retry_after_s: int | None = None,
 ) -> dict[str, Any]:
-    """Build the canonical structured error envelope.
+    """Build the FLAT Response-Envelope Standard v1 error frame.
 
-    Shape (spec §7): an ``error`` block the client branches on plus a ``_meta``
-    block built by :func:`~vep_link.mcp.resources.build_meta` (which already
-    stamps ``capabilities_version`` and ``unsafe_for_clinical_use``). ``request_id``
-    defaults to a fresh 12-hex-char id when not supplied by the caller.
+    Shape (ratified standard §2): ``success: false`` plus the flat
+    ``error_code``/``message``/``retryable``/``recovery_action`` keys the client
+    branches on -- never a nested ``error: {...}`` block -- and a ``_meta`` block
+    built by :func:`~vep_link.mcp.resources.build_meta` (which already stamps
+    ``capabilities_version`` and ``unsafe_for_clinical_use``, and carries
+    ``ctx.next_commands`` as ``_meta.next_commands``). ``request_id`` defaults to
+    a fresh 12-hex-char id when not supplied by the caller.
 
-    Retryable upstream faults additionally carry ``retryable: true`` and a
-    ``retry_after_s`` backoff hint so an LLM can pace a retry instead of giving up.
+    ``recovery`` (a longer human-readable hint) and ``fallback_tool`` are kept as
+    additional flat fields beyond the standard's required set -- extra top-level
+    keys are permitted as long as the mandated ones stay flat. Retryable upstream
+    faults additionally carry a top-level ``retry_after_s`` backoff hint so an
+    LLM can pace a retry instead of giving up.
     """
-    error_block: dict[str, Any] = {
-        "code": code,
+    retryable = code in _RETRYABLE_CODES
+    envelope: dict[str, Any] = {
+        "success": False,
+        "error_code": code,
         "message": message,
+        "retryable": retryable,
+        "recovery_action": _recovery_action(code, retryable),
         "recovery": recovery,
         "fallback_tool": _FALLBACK_TOOL,
-        "next_commands": ctx.next_commands or [],
-        "retryable": code in _RETRYABLE_CODES,
-    }
-    if code in _RETRYABLE_CODES:
-        error_block["retry_after_s"] = (
-            retry_after_s if retry_after_s is not None else _DEFAULT_RETRY_AFTER_S
-        )
-    envelope = {
-        "error": error_block,
         "_meta": build_meta(
             tool=ctx.tool_name,
             request_id=request_id or uuid.uuid4().hex[:12],
             assembly=ctx.assembly,
-            extra={"unsafe_for_clinical_use": True},
+            next_commands=ctx.next_commands,
         ),
     }
+    if retryable:
+        envelope["retry_after_s"] = (
+            retry_after_s if retry_after_s is not None else _DEFAULT_RETRY_AFTER_S
+        )
     _inject_upstream(envelope, ctx)
     return envelope
 
@@ -288,16 +332,17 @@ async def run_mcp_tool(
     tool_name: str,
     body: Callable[[], Awaitable[dict[str, Any]]],
     ctx: McpErrorContext,
-) -> dict[str, Any]:
-    """Execute a tool ``body``, converting any exception into an error envelope.
+) -> dict[str, Any] | ToolResult:
+    """Execute a tool ``body``, converting any exception into a v1 error frame.
 
-    * On success: the body's dict is returned UNCHANGED (it already carries its
-      own ``_meta``).
+    * On success: the body's dict is returned with ``success: true`` injected
+      (its own keys, including ``_meta``, are otherwise untouched).
     * On a known :class:`~vep_link.exceptions.VepLinkError` subclass: mapped to
-      the matching code + recovery via :func:`_classify` and returned as an
-      envelope.
-    * On anything else: a sanitized ``internal_error`` envelope with a correlation
-      id; the original exception text is not leaked.
+      the matching code + recovery via :func:`_classify`, built into the flat
+      frame by :func:`mcp_tool_error`, and returned as an ``is_error=True``
+      :class:`~fastmcp.tools.ToolResult` (see :func:`_finalize_error`).
+    * On anything else: a sanitized ``internal_error`` frame with a correlation
+      id, same wrapping; the original exception text is not leaked.
     """
     start = time.perf_counter()
     # Reset request-scoped telemetry so cache_status/upstream_ms reflect only this
@@ -326,41 +371,61 @@ async def run_mcp_tool(
         return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
 
     # Success: record a healthy outcome, stamp the live upstream hint + timing,
-    # and emit the call metric.
+    # inject the flat-banner success key, and emit the call metric.
     if ctx.health is not None:
         if ctx.assembly:
             ctx.health.record_success(ctx.assembly)
         if isinstance(result, dict):
             _inject_upstream(result, ctx)
-    elapsed_ms = _stamp_elapsed(result, start) if isinstance(result, dict) else 0
+    elapsed_ms = 0
+    if isinstance(result, dict):
+        result.setdefault("success", True)
+        # Defense in depth: guarantee the per-call disclaimer at the wrapper
+        # boundary regardless of whether the body's own ``_meta`` came from
+        # ``build_meta`` (which already sets it) -- every success response MUST
+        # carry it (Response-Envelope Standard v1 §6), not just capabilities.
+        meta = result.get("_meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            result["_meta"] = meta
+        meta["unsafe_for_clinical_use"] = True
+        elapsed_ms = _stamp_elapsed(result, start)
     METRICS.record_tool_call(ctx.tool_name, outcome="success", code=None, elapsed_ms=elapsed_ms)
     return result
 
 
-def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float) -> dict[str, Any]:
-    """Stamp elapsed timing on an error envelope and record the error metric."""
+def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float) -> ToolResult:
+    """Stamp elapsed timing, record the error metric, and set the wire ``isError`` flag.
+
+    Wraps the flat ``envelope`` dict in a :class:`fastmcp.tools.ToolResult` with
+    ``is_error=True`` so a tool function returning this value round-trips to
+    ``CallToolResult.isError = true`` (MCP-native, REQUIRED by Response-Envelope
+    Standard v1 §2) while the flat frame itself still rides as
+    ``structured_content`` -- the in-band shape a client branches on.
+    ``fastmcp``'s ``Tool.convert_result`` passes a returned ``ToolResult``
+    through unchanged (no re-wrapping, no output-schema coercion), verified
+    against the installed ``fastmcp==3.4.2``.
+    """
     elapsed_ms = _stamp_elapsed(envelope, start)
-    code = "internal_error"
-    error_block = envelope.get("error")
-    if isinstance(error_block, dict):
-        code = str(error_block.get("code", code))
+    code = str(envelope.get("error_code", "internal_error"))
     METRICS.record_tool_call(ctx.tool_name, outcome="error", code=code, elapsed_ms=elapsed_ms)
-    return envelope
+    return ToolResult(structured_content=envelope, is_error=True)
 
 
 def install_validation_error_handler(mcp: Any) -> None:
-    """Make FastMCP argument-validation failures return an ``invalid_input`` envelope.
+    """Make FastMCP argument-validation failures return a flat ``invalid_input`` frame.
 
     Adapts the spliceailookup pattern to the local FastMCP build: each registered
     tool's ``run`` is wrapped so a pydantic ``ValidationError`` (raised when a
     client passes arguments that violate the tool schema) is converted into the
-    structured ``invalid_input`` envelope rather than surfacing as an opaque
-    framework error.
+    same flat Response-Envelope Standard v1 ``invalid_input`` frame that
+    :func:`run_mcp_tool` builds (wrapped in an ``is_error=True`` ``ToolResult``)
+    rather than surfacing as an opaque framework error.
 
-    The FastMCP internals are probed defensively and ``fastmcp`` / ``pydantic`` are
-    imported lazily, so this is import-safe and a best-effort no-op when the API
-    differs (e.g. passed a non-FastMCP stub). It is idempotent: already-wrapped
-    tools are skipped.
+    The FastMCP internals are probed defensively and ``pydantic`` is imported
+    lazily, so this is import-safe and a best-effort no-op when the API differs
+    (e.g. passed a non-FastMCP stub). It is idempotent: already-wrapped tools
+    are skipped.
     """
     try:  # lazy + defensive: never fail at import or on a foreign object.
         from pydantic import ValidationError as PydanticValidationError
@@ -394,7 +459,7 @@ def install_validation_error_handler(mcp: Any) -> None:
                 return await _original_run(arguments)
             except PydanticValidationError as exc:
                 ctx = McpErrorContext(tool_name=_tool_name)
-                return mcp_tool_error(
+                envelope = mcp_tool_error(
                     code="invalid_input",
                     message=f"Invalid arguments for {_tool_name}: {exc.error_count()} error(s).",
                     recovery=(
@@ -403,6 +468,7 @@ def install_validation_error_handler(mcp: Any) -> None:
                     ),
                     ctx=ctx,
                 )
+                return ToolResult(structured_content=envelope, is_error=True)
 
         try:
             object.__setattr__(tool, "run", wrapped_run)

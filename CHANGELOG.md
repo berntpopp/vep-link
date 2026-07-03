@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (BREAKING — GeneFoundry Response-Envelope Standard v1)
+
+- **Migrated `run_mcp_tool` to the ratified flat-banner envelope.** Every
+  successful tool response now carries a top-level `success: true` (payload
+  keys and `_meta` are otherwise unchanged — no tool renames, no payload-key
+  renames). Every failure now returns a FLAT `{"success": false, "error_code",
+  "message", "retryable", "recovery_action", ...}` frame instead of the
+  previous nested `{"error": {"code", "message", ...}}` block; `next_commands`
+  moved from `error.next_commands` to `_meta.next_commands`. Failures
+  additionally set the MCP-native `CallToolResult.isError = true` wire flag
+  (verified against the installed `fastmcp==3.4.2`: a tool body returning
+  `ToolResult(structured_content=<frame>, is_error=True)` is passed through
+  unchanged by `Tool.convert_result`), so a client sees both the protocol-level
+  error signal and the actionable in-band frame. `unsafe_for_clinical_use:
+  true` remains on every `_meta` block, success or error. `docs/api.md`'s
+  Error envelope section and the MCP tool-layer tests are updated to the new
+  shape; no tool names or successful payload shapes changed.
+
 ### Security
 
 - **Adopted the GeneFoundry Container & Deployment Hardening Standard v1.** Added

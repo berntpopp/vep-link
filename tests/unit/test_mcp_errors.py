@@ -1,12 +1,18 @@
 """Tests for the MCP error-envelope module (``vep_link.mcp.errors``).
 
-Written test-first. These pin the deterministic contract the LLM branches on:
+Written test-first. These pin the deterministic contract the LLM branches on,
+per the ratified GeneFoundry Response-Envelope Standard v1 (flat banner):
 
 * the exception -> error-code map (with subclass-specificity ordering, so
   ``UnsupportedContigError`` does not collapse into ``invalid_input``),
-* the envelope shape (``error`` + ``_meta``, ``fallback_tool`` ==
-  ``get_capabilities``, ``capabilities_version`` + ``unsafe_for_clinical_use``),
-* the success passthrough (the body's dict is returned unchanged), and
+* the FLAT envelope shape (``success``/``error_code``/``message``/
+  ``retryable``/``recovery_action`` at the top level -- never nested under
+  ``error: {...}`` -- plus ``_meta`` carrying ``next_commands``,
+  ``capabilities_version``, and ``unsafe_for_clinical_use``),
+* that a failure additionally sets the MCP-native ``isError`` wire flag via a
+  :class:`fastmcp.tools.ToolResult` (``is_error=True``),
+* the success passthrough (the body's dict, plus an injected ``success: true``,
+  is returned unchanged otherwise), and
 * ``internal_error`` sanitization (no leaked exception text; a correlation id
   is surfaced instead).
 """
@@ -16,6 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastmcp.tools import ToolResult
 
 from vep_link.exceptions import (
     AmbiguousMappingError,
@@ -36,6 +43,20 @@ from vep_link.mcp.errors import (
     mcp_tool_error,
     run_mcp_tool,
 )
+
+
+def _envelope(result: dict[str, Any] | ToolResult) -> dict[str, Any]:
+    """Extract the flat structured envelope from a ``run_mcp_tool`` error result.
+
+    Error results are a :class:`~fastmcp.tools.ToolResult` (``is_error=True``);
+    this also asserts that invariant so every call site double-checks the wire
+    ``isError`` flag, not just the in-band shape.
+    """
+    assert isinstance(result, ToolResult)
+    assert result.is_error is True
+    envelope = result.structured_content
+    assert envelope is not None
+    return envelope
 
 
 def test_local_validation_recovery_does_not_blame_ensembl() -> None:
@@ -88,19 +109,23 @@ def test_mcp_tool_error_shape() -> None:
         ctx=_ctx(assembly="GRCh38", next_commands=[{"tool": "resolve_variant", "arguments": {}}]),
         request_id="req-123",
     )
-    assert set(env) == {"error", "_meta"}
-    error = env["error"]
-    assert error["code"] == "invalid_input"
-    assert error["message"] == "bad variant"
-    assert error["recovery"] == "fix it"
-    assert error["fallback_tool"] == "get_capabilities"
-    assert error["next_commands"] == [{"tool": "resolve_variant", "arguments": {}}]
+    # FLAT: success/error_code/message/retryable/recovery_action all sit at the
+    # top level -- never nested under an "error" block.
+    assert "error" not in env
+    assert env["success"] is False
+    assert env["error_code"] == "invalid_input"
+    assert env["message"] == "bad variant"
+    assert env["recovery"] == "fix it"
+    assert env["retryable"] is False
+    assert env["recovery_action"] == "reformulate_input"
+    assert env["fallback_tool"] == "get_capabilities"
 
     meta = env["_meta"]
     assert meta["tool"] == "resolve_variant"
     assert meta["request_id"] == "req-123"
     assert meta["assembly"] == "GRCh38"
     assert meta["unsafe_for_clinical_use"] is True
+    assert meta["next_commands"] == [{"tool": "resolve_variant", "arguments": {}}]
     assert "capabilities_version" in meta
 
 
@@ -111,7 +136,8 @@ def test_mcp_tool_error_defaults_next_commands_to_empty_list() -> None:
         recovery="try resolve_variant",
         ctx=_ctx(),
     )
-    assert env["error"]["next_commands"] == []
+    # next_commands rides in _meta (not a nested "error" block) and defaults to [].
+    assert env["_meta"]["next_commands"] == []
 
 
 def test_mcp_tool_error_generates_request_id_when_absent() -> None:
@@ -131,7 +157,7 @@ def test_mcp_tool_error_generates_request_id_when_absent() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_run_mcp_tool_returns_body_result_unchanged_on_success() -> None:
+async def test_run_mcp_tool_injects_success_true_and_preserves_payload_identity() -> None:
     payload = {
         "variant_id": "1-100-A-T",
         "_meta": {"tool": "resolve_variant", "request_id": "abc", "capabilities_version": "x"},
@@ -141,8 +167,12 @@ async def test_run_mcp_tool_returns_body_result_unchanged_on_success() -> None:
         return payload
 
     result = await run_mcp_tool("resolve_variant", body, _ctx())
+    # Same dict object, mutated in place -- the wrapper only injects success + _meta.
     assert result is payload
+    assert isinstance(result, dict)
+    assert result["success"] is True
     assert "error" not in result
+    assert result["_meta"]["unsafe_for_clinical_use"] is True
 
 
 async def test_run_mcp_tool_stamps_elapsed_ms_on_success() -> None:
@@ -237,10 +267,13 @@ async def test_run_mcp_tool_maps_each_domain_exception(exc: Exception, expected_
     async def body() -> dict[str, Any]:
         raise exc
 
-    env = await run_mcp_tool("resolve_variant", body, _ctx())
-    assert env["error"]["code"] == expected_code
-    assert env["error"]["fallback_tool"] == "get_capabilities"
-    assert env["error"]["recovery"]
+    result = await run_mcp_tool("resolve_variant", body, _ctx())
+    env = _envelope(result)
+    assert env["success"] is False
+    assert env["error_code"] == expected_code
+    assert env["fallback_tool"] == "get_capabilities"
+    assert env["recovery"]
+    assert isinstance(env["recovery_action"], str) and env["recovery_action"]
     meta = env["_meta"]
     assert "capabilities_version" in meta
     assert meta["unsafe_for_clinical_use"] is True
@@ -254,8 +287,9 @@ async def test_unsupported_contig_maps_to_unsupported_input_not_invalid() -> Non
     async def body() -> dict[str, Any]:
         raise UnsupportedContigError("MT not supported")
 
-    env = await run_mcp_tool("liftover_variant", body, _ctx(tool_name="liftover_variant"))
-    assert env["error"]["code"] == "unsupported_input"
+    result = await run_mcp_tool("liftover_variant", body, _ctx(tool_name="liftover_variant"))
+    env = _envelope(result)
+    assert env["error_code"] == "unsupported_input"
 
 
 async def test_run_mcp_tool_envelope_carries_assembly_and_next_commands() -> None:
@@ -266,9 +300,11 @@ async def test_run_mcp_tool_envelope_carries_assembly_and_next_commands() -> Non
         assembly="GRCh37",
         next_commands=[{"tool": "resolve_variant", "arguments": {"variant": "x"}}],
     )
-    env = await run_mcp_tool("resolve_variant", body, ctx)
+    result = await run_mcp_tool("resolve_variant", body, ctx)
+    env = _envelope(result)
     assert env["_meta"]["assembly"] == "GRCh37"
-    assert env["error"]["next_commands"] == [
+    # next_commands rides in _meta on the flat frame, not a nested "error" block.
+    assert env["_meta"]["next_commands"] == [
         {"tool": "resolve_variant", "arguments": {"variant": "x"}}
     ]
 
@@ -282,16 +318,16 @@ async def test_generic_exception_becomes_sanitized_internal_error() -> None:
     async def body() -> dict[str, Any]:
         raise RuntimeError("boom")
 
-    env = await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
-    error = env["error"]
-    assert error["code"] == "internal_error"
+    result = await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
+    env = _envelope(result)
+    assert env["error_code"] == "internal_error"
     # The raw exception text MUST NOT leak.
-    assert "boom" not in error["message"]
-    assert "boom" not in error["recovery"]
+    assert "boom" not in env["message"]
+    assert "boom" not in env["recovery"]
     # A correlation id IS surfaced (in the message) for support reference.
-    assert "correlation_id" in error["message"]
-    assert "annotate_variant" in error["message"]
-    assert error["fallback_tool"] == "get_capabilities"
+    assert "correlation_id" in env["message"]
+    assert "annotate_variant" in env["message"]
+    assert env["fallback_tool"] == "get_capabilities"
     assert env["_meta"]["unsafe_for_clinical_use"] is True
 
 
@@ -304,22 +340,24 @@ async def test_unknown_vep_link_error_maps_to_internal_error() -> None:
     async def body() -> dict[str, Any]:
         raise WeirdError("secret detail")
 
-    env = await run_mcp_tool("resolve_variant", body, _ctx())
-    assert env["error"]["code"] == "internal_error"
-    assert "secret detail" not in env["error"]["message"]
-    assert "correlation_id" in env["error"]["message"]
+    result = await run_mcp_tool("resolve_variant", body, _ctx())
+    env = _envelope(result)
+    assert env["error_code"] == "internal_error"
+    assert "secret detail" not in env["message"]
+    assert "correlation_id" in env["message"]
 
 
 async def test_internal_error_does_not_leak_raw_message() -> None:
     async def body() -> dict[str, Any]:
         raise RuntimeError("boom-detail")
 
-    env = await run_mcp_tool("resolve_variant", body, _ctx())
+    result = await run_mcp_tool("resolve_variant", body, _ctx())
+    env = _envelope(result)
 
     # The sanitized envelope hides the raw exception text everywhere.
-    assert "boom-detail" not in env["error"]["message"]
-    assert "boom-detail" not in env["error"]["recovery"]
-    assert env["error"]["code"] == "internal_error"
+    assert "boom-detail" not in env["message"]
+    assert "boom-detail" not in env["recovery"]
+    assert env["error_code"] == "internal_error"
 
 
 # ---------------------------------------------------------------------------
@@ -349,3 +387,24 @@ def test_install_validation_error_handler_wraps_fastmcp_tools() -> None:
     # Must not raise; idempotent on a real (stub-like) FastMCP instance.
     install_validation_error_handler(mcp)
     install_validation_error_handler(mcp)
+
+
+async def test_install_validation_error_handler_returns_flat_iserror_tool_result() -> None:
+    """A validation failure MUST produce the same flat v1 frame (wrapped in an
+    ``is_error=True`` ``ToolResult``) as a domain exception, not a bespoke shape."""
+    fastmcp = pytest.importorskip("fastmcp")
+    mcp = fastmcp.FastMCP("vep-link-validation-test")
+
+    @mcp.tool
+    def echo(a: int) -> int:
+        return a
+
+    install_validation_error_handler(mcp)
+    result = await mcp.call_tool("echo", {"a": "not-an-int"})
+    assert isinstance(result, ToolResult)
+    assert result.is_error is True
+    env = result.structured_content
+    assert env is not None
+    assert env["success"] is False
+    assert env["error_code"] == "invalid_input"
+    assert env["_meta"]["unsafe_for_clinical_use"] is True
