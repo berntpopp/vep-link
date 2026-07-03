@@ -31,7 +31,7 @@ def register_health_tools(
         name="check_upstream_health",
         title="Check Ensembl Upstream Health",
         annotations=READ_ONLY_OPEN_WORLD,
-        tags={"diagnostics", "health"},
+        tags={"ops", "diagnostics", "health"},
     )
     async def check_upstream_health() -> dict[str, Any]:
         """Use this to check whether the Ensembl REST hosts are healthy before a batch, or when calls start failing. Runs a live /info/ping of both assemblies (GRCh38 rest.ensembl.org, GRCh37 grch37.rest.ensembl.org) and returns each host's status (ok | recovering | down), circuit state, reachability, latency, and last error. If one build is degraded, route to the healthy one or back off. Returns <1kB."""
