@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Single-sourced the package version and advertised it in MCP `serverInfo`.**
+  `pyproject.toml [project].version` is now the single source of truth (was
+  `dynamic`, read from `vep_link/__init__.py`); `vep_link.__version__` derives
+  from the installed distribution metadata (`importlib.metadata.version`) rather
+  than a hardcoded literal that had drifted from the built metadata. The FastMCP
+  facade now passes `version=__version__` to `FastMCP(...)`, so an `initialize`
+  handshake reports the package version in `serverInfo.version` instead of the
+  FastMCP framework version (`3.4.2`). `/health` was already correct. PATCH bump
+  to `1.0.1`.
+
 ### Changed (BREAKING — GeneFoundry Response-Envelope Standard v1)
 
 - **Migrated `run_mcp_tool` to the ratified flat-banner envelope.** Every

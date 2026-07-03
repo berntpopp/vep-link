@@ -20,6 +20,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
+from vep_link import __version__
 from vep_link.mcp.errors import install_validation_error_handler
 from vep_link.mcp.resources import RESEARCH_USE_NOTICE
 from vep_link.mcp.tools import register_vep_tools
@@ -76,6 +77,7 @@ def create_vep_mcp(
 
     mcp: FastMCP = FastMCP(
         name="vep-link",
+        version=__version__,
         instructions=_INSTRUCTIONS,
         mask_error_details=True,
     )

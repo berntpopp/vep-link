@@ -182,10 +182,12 @@ def test_server_capabilities_identity_fields() -> None:
     assert caps["disclaimer"] == RESEARCH_USE_NOTICE
 
 
-def test_server_version_is_1_0_0() -> None:
-    # 1.0.0: MAJOR bump for the BREAKING GeneFoundry Response-Envelope
-    # Standard v1 migration (flat error banner + wire isError).
-    assert server_capabilities()["server_version"] == "1.0.0"
+def test_server_version_is_1_0_1() -> None:
+    # 1.0.x MAJOR line: the BREAKING GeneFoundry Response-Envelope Standard v1
+    # migration (flat error banner + wire isError). 1.0.1 (PATCH): single-source
+    # the version (pyproject [project].version) and advertise it in MCP
+    # serverInfo instead of the FastMCP framework version.
+    assert server_capabilities()["server_version"] == "1.0.1"
 
 
 def test_standard_tier_doc_mentions_collapsed() -> None:
