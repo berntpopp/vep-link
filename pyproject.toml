@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vep-link"
-dynamic = ["version"]
+version = "1.0.1"
 description = "A unified server providing REST API and MCP interfaces for Ensembl VEP and Variant Recoder across GRCh38 and GRCh37."
 readme = "README.md"
 authors = [{ name = "Bernt Popp" }]
@@ -62,10 +62,8 @@ Homepage = "https://github.com/berntpopp/vep-link"
 Repository = "https://github.com/berntpopp/vep-link"
 Issues = "https://github.com/berntpopp/vep-link/issues"
 
-# Single source of truth for the version: vep_link/__init__.py (__version__).
-[tool.hatch.version]
-path = "vep_link/__init__.py"
-
+# Single source of truth for the version: pyproject.toml [project].version.
+# vep_link.__version__ derives from the installed distribution metadata.
 [tool.hatch.build.targets.wheel]
 packages = ["vep_link"]
 
