@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Harden Ensembl REST URL test assertions to exact/settings-based checks
+  (clears two CodeQL `py/incomplete-url-substring-sanitization` alerts).
 - **Single-sourced the package version and advertised it in MCP `serverInfo`.**
   `pyproject.toml [project].version` is now the single source of truth (was
   `dynamic`, read from `vep_link/__init__.py`); `vep_link.__version__` derives
