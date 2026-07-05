@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vep-link"
-version = "1.0.1"
+version = "1.0.2"
 description = "A unified server providing REST API and MCP interfaces for Ensembl VEP and Variant Recoder across GRCh38 and GRCh37."
 readme = "README.md"
 authors = [{ name = "Bernt Popp" }]

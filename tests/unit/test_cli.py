@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 
 from vep_link import __version__
 from vep_link.cli import app
+from vep_link.config import Settings
 
 runner = CliRunner()
 
@@ -53,7 +54,7 @@ def test_config_command_runs() -> None:
     result = runner.invoke(app, ["config"])
     assert result.exit_code == 0
     assert "GRCh38" in result.output
-    assert "rest.ensembl.org" in result.output
+    assert Settings().VEP_GRCH38_URL in result.output
 
 
 def test_config_shows_key_settings() -> None:
