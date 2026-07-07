@@ -41,6 +41,16 @@ from vep_link.mcp.facade import create_vep_mcp
 from vep_link.observability.metrics import METRICS, render_circuit_state
 from vep_link.services.vep_service import VepService
 
+# fastmcp >=3.4.3 defaults http_host_origin_protection on, which returns 421
+# Misdirected Request for any proxied /mcp request whose Host is not localhost
+# (e.g. traffic from the genefoundry-router). NPM already validates the Host
+# via server_name + TLS SNI, so disable the redundant app-layer guard. This is
+# a no-op on fastmcp <3.4.3 (the setting does not exist yet), so it is safe to
+# land before the version bump that would otherwise break federation.
+import fastmcp
+if hasattr(fastmcp.settings, "http_host_origin_protection"):
+    fastmcp.settings.http_host_origin_protection = False
+
 # Prometheus text exposition format version (content-type parameter).
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
