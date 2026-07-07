@@ -300,23 +300,24 @@ def _stamp_elapsed(envelope: dict[str, Any], start: float) -> int:
 def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[str, Any]:
     """Build a sanitized ``internal_error`` envelope and log the real exception.
 
-    The original exception text is NEVER surfaced to the client. A fresh
+    The original exception text is NEVER surfaced to the client -- nor written to
+    the log, since it can carry a patient variant string (PII). A fresh
     ``correlation_id`` is generated, embedded in the client-facing message, and
-    logged with the real exception at error level so an operator can correlate
-    the redacted client message with the unredacted server log.
+    logged at error level with only the exception CLASS name so an operator can
+    correlate the redacted client message with the server log without leaking
+    the exception detail.
     """
     correlation_id = uuid.uuid4().hex[:12]
-    # Log the real exception (type + repr + traceback) under the correlation id so
-    # an operator can join the redacted client message to the full server-side
-    # detail. ``exc_info`` is rendered by the configured ``format_exc_info``
-    # processor (see ``vep_link.logging_config``).
+    # Log the exception CLASS name (never ``repr(exc)``/``str(exc)`` nor an
+    # ``exc_info`` traceback) under the correlation id: the message text can
+    # embed a patient variant string (PII), and the traceback would render it.
+    # The operator correlates the redacted client message to this line via the
+    # correlation id; the class name is enough to route the failure.
     logger.error(
         "mcp_internal_error",
         tool=ctx.tool_name,
         correlation_id=correlation_id,
         exc_type=type(exc).__name__,
-        exc_repr=repr(exc),
-        exc_info=exc,
     )
     message = f"Internal error in {ctx.tool_name} (correlation_id={correlation_id}). Retry later."
     return mcp_tool_error(

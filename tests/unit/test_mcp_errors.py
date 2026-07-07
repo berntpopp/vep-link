@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 from fastmcp.tools import ToolResult
+from structlog.testing import capture_logs
 
 from vep_link.exceptions import (
     AmbiguousMappingError,
@@ -358,6 +359,35 @@ async def test_internal_error_does_not_leak_raw_message() -> None:
     assert "boom-detail" not in env["message"]
     assert "boom-detail" not in env["recovery"]
     assert env["error_code"] == "internal_error"
+
+
+async def test_internal_error_log_excludes_exception_detail() -> None:
+    # An internal error whose exception message carries a variant-string sentinel
+    # (patient PII in practice) must NOT embed that sentinel in the operator log
+    # line. Only the exception CLASS name + correlation id are logged -- never
+    # repr(exc)/str(exc) nor the exc_info traceback (which would render str(exc)).
+    # See the 2026-07-07 fleet security remediation, Theme A / design spec 6.2.
+    sentinel = "SENTINEL-PII-7f3a-chr17:g.41246481A>T"
+
+    async def body() -> dict[str, Any]:
+        raise RuntimeError(sentinel)
+
+    with capture_logs() as logs:
+        result = await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
+
+    env = _envelope(result)
+    assert env["error_code"] == "internal_error"
+
+    internal = [e for e in logs if e.get("event") == "mcp_internal_error"]
+    assert internal, "expected an mcp_internal_error log record"
+    rec = internal[0]
+    # The operator can still triage: exception class + correlation id are kept...
+    assert rec["exc_type"] == "RuntimeError"
+    assert "correlation_id" in rec
+    # ...but the sentinel must not appear in ANY captured record (drops the
+    # exc_repr field and the exc_info traceback that embedded str(exc)).
+    for entry in logs:
+        assert sentinel not in repr(entry), f"internal-error log leaked exception detail: {entry!r}"
 
 
 # ---------------------------------------------------------------------------
