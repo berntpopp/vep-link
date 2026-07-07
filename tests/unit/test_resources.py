@@ -185,13 +185,15 @@ def test_server_capabilities_identity_fields() -> None:
     assert caps["disclaimer"] == RESEARCH_USE_NOTICE
 
 
-def test_server_version_is_1_0_2() -> None:
+def test_server_version_is_1_0_3() -> None:
     # 1.0.x MAJOR line: the BREAKING GeneFoundry Response-Envelope Standard v1
     # migration (flat error banner + wire isError). 1.0.1 (PATCH): single-source
     # the version (pyproject [project].version) and advertise it in MCP
     # serverInfo instead of the FastMCP framework version. 1.0.2 (PATCH):
     # harden the Ensembl REST URL test assertions (CodeQL url-substring).
-    assert server_capabilities()["server_version"] == "1.0.2"
+    # 1.0.3 (PATCH): security remediation -- loopback-bind the base compose
+    # host port and drop exception detail (PII) from the internal-error log.
+    assert server_capabilities()["server_version"] == "1.0.3"
 
 
 def test_standard_tier_doc_mentions_collapsed() -> None:

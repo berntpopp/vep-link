@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Security remediation (2026-07-07).** Two inbound-boundary hardening fixes,
+  each with a test guard. PATCH bump to `1.0.3`.
+  - Loopback-bind the base `docker-compose.yml` published host port
+    (`127.0.0.1:${VEP_LINK_HOST_PORT}:8000`) so copying the dev/local compose
+    to a server never publishes the unauthenticated backend on the public IP
+    (Docker otherwise binds `0.0.0.0` and bypasses the host firewall);
+    production still fronts the container via the router/reverse proxy.
+  - Drop the exception detail from the `mcp_internal_error` operator log: only
+    the exception CLASS name + `correlation_id` are logged now (no
+    `repr(exc)`/`str(exc)`, no `exc_info` traceback), because the message text
+    can embed a patient variant string (PII).
 - Harden Ensembl REST URL test assertions to exact/settings-based checks
   (clears two CodeQL `py/incomplete-url-substring-sanitization` alerts).
 - **Single-sourced the package version and advertised it in MCP `serverInfo`.**
