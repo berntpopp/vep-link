@@ -22,8 +22,13 @@ services:
       VEP_LINK_MCP_PORT: 8000
       VEP_LINK_MCP_PATH: /mcp
 
+    # Dev/local only — loopback-bound (127.0.0.1) so copying this file to a
+    # server never publishes the unauthenticated backend on the public IP
+    # (Docker would otherwise bind 0.0.0.0 and bypass the host firewall).
+    # Production fronts the container with a reverse proxy via the prod/npm
+    # overlays (ports: !reset []). Backends are unauthenticated by design.
     ports:
-      - "${VEP_LINK_HOST_PORT:-8021}:8000"
+      - "127.0.0.1:${VEP_LINK_HOST_PORT:-8021}:8000"
 
     command: ["vep-link", "serve", "--transport", "unified", "--host", "0.0.0.0", "--port", "8000"]
 
