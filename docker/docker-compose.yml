@@ -21,6 +21,7 @@ services:
       VEP_LINK_MCP_HOST: 0.0.0.0
       VEP_LINK_MCP_PORT: 8000
       VEP_LINK_MCP_PATH: /mcp
+      VEP_LINK_MCP_ALLOWED_HOSTS: '["localhost","127.0.0.1","::1"]'
 
     # Dev/local only — loopback-bound (127.0.0.1) so copying this file to a
     # server never publishes the unauthenticated backend on the public IP
@@ -33,7 +34,7 @@ services:
     command: ["vep-link", "serve", "--transport", "unified", "--host", "0.0.0.0", "--port", "8000"]
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "-H", "Host: localhost", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -189,10 +189,18 @@ All settings use the `VEP_LINK_` env prefix (and an optional `.env`; copy
 | `VEP_LINK_MCP_HOST` | `127.0.0.1` | Bind host. |
 | `VEP_LINK_MCP_PORT` | `8000` | Bind port. |
 | `VEP_LINK_MCP_PATH` | `/mcp` | MCP mount path. |
+| `VEP_LINK_MCP_ALLOWED_HOSTS` | `["localhost","127.0.0.1","::1"]` | Exact HTTP Host allowlist as JSON; wildcards are rejected. |
+| `VEP_LINK_MCP_ALLOWED_ORIGINS` | `[]` | Exact browser Origin allowlist as JSON; absent Origin remains allowed. |
 | `VEP_LINK_LOG_LEVEL` | `INFO` | Log level. |
 | `VEP_LINK_LOG_FORMAT` | `json` | `json` (prod) or `console` (dev). |
 | `VEP_LINK_CORS_ORIGINS` | `*` | Comma-separated CORS origins. |
 | `VEP_LINK_USER_AGENT` | `vep-link/0.1 (research MCP; +https://github.com/berntpopp/vep-link)` | Upstream User-Agent. |
+
+Host and Origin validation is strict on health, metrics, and MCP routes. Add
+reverse-proxy hostnames as exact entries in `VEP_LINK_MCP_ALLOWED_HOSTS`.
+Browser deployments must configure the same exact origins in both
+`VEP_LINK_MCP_ALLOWED_ORIGINS` and `VEP_LINK_CORS_ORIGINS`; transport validation
+and browser CORS are independent controls.
 
 ## CLI
 

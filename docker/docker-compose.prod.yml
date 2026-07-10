@@ -13,6 +13,9 @@ services:
     environment:
       VEP_LINK_LOG_LEVEL: INFO
       VEP_LINK_LOG_FORMAT: json
+      VEP_LINK_MCP_ALLOWED_HOSTS: '["localhost","127.0.0.1","::1","vep-link.genefoundry.org"]'
+      VEP_LINK_MCP_ALLOWED_ORIGINS: '["https://vep-link.genefoundry.org"]'
+      VEP_LINK_CORS_ORIGINS: https://vep-link.genefoundry.org
     # Expose-only behind the reverse proxy. !reset (not []) is required: Compose
     # MERGES list fields across -f overlays, so a plain `ports: []` would NOT drop
     # the base file's published "${VEP_LINK_HOST_PORT:-8021}:8000" mapping.
