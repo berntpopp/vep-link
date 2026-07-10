@@ -13,7 +13,7 @@ this backend's sole MCP error boundary, :func:`run_mcp_tool`:
   deferred to a non-normative v2 appendix). The frame is returned wrapped in a
   :class:`fastmcp.tools.ToolResult` with ``is_error=True`` so the failure ALSO
   sets the MCP-native ``CallToolResult.isError`` wire flag (REQUIRED by v1 §2),
-  verified against the installed ``fastmcp==3.4.2``: a tool function returning a
+  verified against the installed ``fastmcp==3.4.4``: a tool function returning a
   ``ToolResult`` instance is passed through unchanged by ``Tool.convert_result``
   (``fastmcp/tools/base.py``), and ``ToolResult(structured_content=...,
   is_error=True)`` round-trips to ``CallToolResult.isError``.
@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.tools import ToolResult
 
 if TYPE_CHECKING:
@@ -405,7 +406,7 @@ def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float
     ``structured_content`` -- the in-band shape a client branches on.
     ``fastmcp``'s ``Tool.convert_result`` passes a returned ``ToolResult``
     through unchanged (no re-wrapping, no output-schema coercion), verified
-    against the installed ``fastmcp==3.4.2``.
+    against the installed ``fastmcp==3.4.4``.
     """
     elapsed_ms = _stamp_elapsed(envelope, start)
     code = str(envelope.get("error_code", "internal_error"))
@@ -458,11 +459,12 @@ def install_validation_error_handler(mcp: Any) -> None:
         ) -> Any:
             try:
                 return await _original_run(arguments)
-            except PydanticValidationError as exc:
+            except (PydanticValidationError, FastMCPValidationError) as exc:
                 ctx = McpErrorContext(tool_name=_tool_name)
+                error_count = exc.error_count() if isinstance(exc, PydanticValidationError) else 1
                 envelope = mcp_tool_error(
                     code="invalid_input",
-                    message=f"Invalid arguments for {_tool_name}: {exc.error_count()} error(s).",
+                    message=f"Invalid arguments for {_tool_name}: {error_count} error(s).",
                     recovery=(
                         "Fix the tool arguments to match the schema; "
                         "call get_capabilities for accepted parameters."

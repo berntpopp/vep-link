@@ -25,19 +25,13 @@ import contextlib
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-# fastmcp >=3.4.3 defaults http_host_origin_protection on, which returns 421
-# Misdirected Request for any proxied /mcp request whose Host is not localhost
-# (e.g. traffic from the genefoundry-router). NPM already validates the Host
-# via server_name + TLS SNI, so disable the redundant app-layer guard. This is
-# a no-op on fastmcp <3.4.3 (the setting does not exist yet), so it is safe to
-# land before the version bump that would otherwise break federation.
-import fastmcp
 import structlog
 import uvicorn
 from asgi_correlation_id import CorrelationIdMiddleware
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
+from fastmcp.server.http import HostOriginGuardMiddleware
 
 from vep_link import __version__
 from vep_link.api.ensembl_client import EnsemblClient
@@ -47,9 +41,6 @@ from vep_link.logging_config import configure_logging
 from vep_link.mcp.facade import create_vep_mcp
 from vep_link.observability.metrics import METRICS, render_circuit_state
 from vep_link.services.vep_service import VepService
-
-if hasattr(fastmcp.settings, "http_host_origin_protection"):
-    fastmcp.settings.http_host_origin_protection = False
 
 # Prometheus text exposition format version (content-type parameter).
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
@@ -144,6 +135,12 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(
+        HostOriginGuardMiddleware,
+        allowed_hosts=settings.MCP_ALLOWED_HOSTS,
+        allowed_origins=settings.MCP_ALLOWED_ORIGINS,
+        mode="strict",
+    )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -178,7 +175,14 @@ def build_app(config: ServerConfig | None = None) -> FastAPI:
     # make Starlette redirect ``POST /mcp`` -> ``/mcp/`` (HTTP 307); baking the
     # path in means ``POST /mcp`` is served directly with no redirect, matching
     # the rest of the -link fleet (cf. gtex-link's UnifiedServerManager).
-    mcp_app = mcp.http_app(path=cfg.mcp_path, stateless_http=True, json_response=True)
+    mcp_app = mcp.http_app(
+        path=cfg.mcp_path,
+        stateless_http=True,
+        json_response=True,
+        host_origin_protection=True,
+        allowed_hosts=settings.MCP_ALLOWED_HOSTS,
+        allowed_origins=settings.MCP_ALLOWED_ORIGINS,
+    )
     _compose_lifespan(app, mcp_app)
     app.mount("/", mcp_app)
 

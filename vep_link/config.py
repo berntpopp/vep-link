@@ -187,6 +187,8 @@ class Settings(BaseSettings):
     MCP_HOST: str = "127.0.0.1"
     MCP_PORT: int = 8000
     MCP_PATH: str = "/mcp"
+    MCP_ALLOWED_HOSTS: list[str] = ["localhost", "127.0.0.1", "::1"]
+    MCP_ALLOWED_ORIGINS: list[str] = []
 
     # Logging.
     LOG_LEVEL: str = "INFO"
@@ -208,6 +210,13 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_mcp_path(cls, v: str) -> str:
         return v if v.startswith("/") else f"/{v}"
+
+    @field_validator("MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS")
+    @classmethod
+    def _reject_allowlist_wildcards(cls, values: list[str]) -> list[str]:
+        if any(character in entry for entry in values for character in "*?[]"):
+            raise ValueError("wildcard entries are not permitted in MCP allowlists")
+        return values
 
     def base_url(self, build: GenomeBuild | str) -> str:
         """Return the Ensembl REST base URL for an assembly."""
