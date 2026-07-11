@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Error-message sanitation (defense in depth). PATCH bump to `1.0.4`.**
+  Caller-visible error messages are sanitized of control/zero-width/bidi/NUL
+  code points; the upstream Ensembl VEP error body is no longer echoed; batch-row
+  and health `last_error` no longer expose exception text; the debug log no
+  longer renders raw exception detail. Research use only.
+
 ### Fixed
 
 - **Security remediation (2026-07-07).** Two inbound-boundary hardening fixes,
