@@ -66,6 +66,7 @@ from vep_link.exceptions import (
     VariantParseError,
     VepLinkError,
 )
+from vep_link.mcp._sanitize import sanitize_message
 from vep_link.mcp.resources import build_meta
 from vep_link.observability.metrics import METRICS
 from vep_link.observability.telemetry import (
@@ -246,7 +247,14 @@ def mcp_tool_error(
     envelope: dict[str, Any] = {
         "success": False,
         "error_code": code,
-        "message": message,
+        # Single choke point for EVERY error path (classified str(exc), the
+        # arg-validation frame, and the internal_error fallback all route through
+        # here): strip the fence's forbidden control/zero-width/bidi/NUL code
+        # points so a hostile upstream can never smuggle them into the frame in
+        # either structured_content or the TextContent JSON mirror. Attacker-
+        # influenceable upstream response BODIES are additionally severed at the
+        # API client, since sanitizing strips code points but not injection prose.
+        "message": sanitize_message(message),
         "retryable": retryable,
         "recovery_action": _recovery_action(code, retryable),
         "recovery": recovery,

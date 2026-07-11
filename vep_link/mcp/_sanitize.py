@@ -12,9 +12,9 @@ Two complementary defenses close it:
 
 * **Sever** (at the source): attacker-influenceable upstream response *bodies*
   are never interpolated into an exception message (see
-  ``vep_link.api.base_client._extract_error_message``) -- a fixed, status-keyed,
-  body-free message is raised instead. ``sanitize_message`` alone is NOT enough
-  for a body, because it strips code points but not injection *prose*.
+  ``vep_link.api.base_client._safe_upstream_input_message``) -- a fixed,
+  status-keyed, body-free message is raised instead. ``sanitize_message`` alone
+  is NOT enough for a body, because it strips code points but not injection *prose*.
 * **Sanitize** (defensive backstop): every caller-visible message string is run
   through :func:`sanitize_message`, which drops the same control / zero-width /
   bidi / NUL code points the fleet untrusted-text fence removes, so a hostile

@@ -105,7 +105,15 @@ class UpstreamHealth:
     def record_failure(self, assembly: str | GenomeBuild, error: object | None = None) -> None:
         st = self._host(assembly)
         if error is not None:
-            st.last_error = str(error)[:200]
+            # Store ONLY the exception class name -- a bounded, server-controlled
+            # identifier -- never str(error). The message can embed an upstream
+            # URL, httpx transport text, or a reflected Ensembl 4xx body, any of
+            # which would leak verbatim through the vep://health resource, the
+            # check_upstream_health tool, AND get_capabilities.upstream (all read
+            # this stored value). Sanitizing on storage covers every reader; a
+            # fixed short form (the class name) is preferred over str(error)
+            # because the raw text can carry injection prose the sanitizer keeps.
+            st.last_error = type(error).__name__
         if st.state == "open":
             # Already open: do not extend the cooldown window.
             return

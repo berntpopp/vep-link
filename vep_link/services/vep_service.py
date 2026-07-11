@@ -41,6 +41,7 @@ from vep_link.exceptions import (
     VariantParseError,
     VepLinkError,
 )
+from vep_link.mcp._sanitize import sanitize_message
 from vep_link.models.enums import GenomeBuild, InputKind
 from vep_link.observability.telemetry import telemetry_cache
 from vep_link.services._recoding import (
@@ -352,8 +353,22 @@ class VepService:
 
     @staticmethod
     def _batch_error(original: str, code: str, exc: Exception) -> dict:
-        """Shape a per-input batch failure record."""
-        return {"input": original, "error_code": code, "message": str(exc)}
+        """Shape a per-input batch failure record.
+
+        This row rides inside an otherwise-successful batch response, so it
+        bypasses the MCP error boundary (:func:`run_mcp_tool`) and its sanitation
+        -- the per-item ``message`` is therefore made safe here directly. An
+        ``internal_error`` NEVER echoes ``str(exc)`` (it can carry internal detail
+        / filesystem paths), matching the boundary's opaque-internal contract; a
+        classified fault's server-authored message is stripped of the fence's
+        forbidden control / zero-width / bidi / NUL code points.
+        """
+        message = (
+            "Internal error while processing this input."
+            if code == "internal_error"
+            else sanitize_message(str(exc) or type(exc).__name__)
+        )
+        return {"input": original, "error_code": code, "message": message}
 
     # -- recode ------------------------------------------------------------
 

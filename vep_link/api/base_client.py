@@ -194,10 +194,10 @@ class BaseHTTPClient:
                 last_exc = exc
                 status = exc.response.status_code
                 if status in _INPUT_ERROR_STATUS:
-                    raise UpstreamInputError(_extract_error_message(exc.response, status)) from exc
+                    raise UpstreamInputError(_safe_upstream_input_message(status)) from exc
                 if status not in _RETRYABLE_STATUS:
                     # Non-retryable 4xx (e.g. 401/403): deterministic input error.
-                    raise UpstreamInputError(_extract_error_message(exc.response, status)) from exc
+                    raise UpstreamInputError(_safe_upstream_input_message(status)) from exc
                 if is_last:
                     if status == 429:
                         raise RateLimitedError(
@@ -278,12 +278,15 @@ def _parse_retry_after(value: str | None) -> float | None:
     return max(0.0, delta)
 
 
-def _extract_error_message(response: httpx.Response, status: int) -> str:
-    """Best-effort human-readable message from a 4xx body (Ensembl: ``{"error": ...}``)."""
-    try:
-        body = response.json()
-    except Exception:
-        body = None
-    if isinstance(body, dict) and body.get("error"):
-        return str(body["error"])
+def _safe_upstream_input_message(status: int) -> str:
+    """Fixed, body-free message for a non-retryable upstream (4xx) rejection.
+
+    The upstream response BODY is deliberately NOT read or interpolated: a
+    caller-influenced query can make Ensembl reflect hostile prose (including
+    control / zero-width / bidi / NUL code points) into a 4xx body, and echoing
+    it verbatim would smuggle attacker-controlled text into a caller-visible
+    error message (a defense-in-depth, secondary-surface leak). The HTTP status
+    is a bounded, non-attacker-controlled scalar, so it is safe to key a fixed
+    message on; the body is neither surfaced nor logged (no-PII-in-logs invariant).
+    """
     return f"Upstream rejected the request (HTTP {status})."

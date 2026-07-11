@@ -8,6 +8,7 @@ import respx
 
 from vep_link.api.health import UpstreamHealth
 from vep_link.config import Settings
+from vep_link.exceptions import EnsemblApiError
 from vep_link.models.enums import GenomeBuild
 
 GRCH38_PING = "https://rest.ensembl.org/info/ping"
@@ -43,10 +44,12 @@ def test_trips_open_after_threshold(health_settings: Settings) -> None:
     clock = FakeClock()
     h = UpstreamHealth(health_settings, clock=clock)
     for _ in range(3):
-        h.record_failure("GRCh38", error="boom")
+        h.record_failure("GRCh38", error=EnsemblApiError("boom"))
     assert h.status_for("GRCh38") == "down"
     assert h.allow("GRCh38") is False
-    assert h.snapshot()["GRCh38"]["last_error"] == "boom"
+    # last_error stores the exception CLASS name only (never str(error)), so a
+    # reflected upstream body can never leak through the health snapshot.
+    assert h.snapshot()["GRCh38"]["last_error"] == "EnsemblApiError"
     # The other host is unaffected.
     assert h.status_for("GRCh37") == "ok"
 
