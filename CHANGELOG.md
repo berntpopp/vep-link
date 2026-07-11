@@ -8,6 +8,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **FastMCP-core not-found reflection guard. PATCH bump to `1.0.5`.**
+  FastMCP core reflected the caller's OWN requested tool name / resource URI /
+  prompt name (with any control/zero-width/bidi/NUL code points and injection
+  prose) back to the caller and to logs *before* backend middleware ran. A
+  layered guard (`vep_link/mcp/notfound_guard.py`) closes it with fixed,
+  input-free constants: Layer 1 preflights an unknown tool name to a name-free
+  `not_found` envelope; Layer 2 collapses any `on_read_resource` failure to a
+  fixed URI-free error; Layer 3 is a protocol-handler backstop over the raw
+  CallTool/ReadResource/GetPrompt handlers (covers the unknown-tool *return*
+  path and the unknown-prompt echo — vep registers no prompts, so every
+  `prompts/get` is unknown); Layer 5 scrubs the FastMCP/MCP-SDK validation logs
+  (`Handler called`, `Tool cache miss for`, session `Failed to validate request`)
+  at DEBUG+ on their source loggers and handlers. No success/error schema
+  change; caller self-reflection surface (low–medium severity). Research use only.
+
 - **Error-message sanitation (defense in depth). PATCH bump to `1.0.4`.**
   Caller-visible error messages are sanitized of control/zero-width/bidi/NUL
   code points; the upstream Ensembl VEP error body is no longer echoed; batch-row
