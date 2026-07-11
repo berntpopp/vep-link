@@ -22,6 +22,11 @@ from fastmcp import FastMCP
 
 from vep_link import __version__
 from vep_link.mcp.errors import install_validation_error_handler
+from vep_link.mcp.notfound_guard import (
+    NotFoundGuard,
+    install_protocol_error_handler,
+    install_validation_log_filter,
+)
 from vep_link.mcp.resources import RESEARCH_USE_NOTICE
 from vep_link.mcp.tools import register_vep_tools
 
@@ -81,9 +86,29 @@ def create_vep_mcp(
         instructions=_INSTRUCTIONS,
         mask_error_details=True,
     )
+
+    # Guard the FastMCP-core not-found reflection surface: core echoes the
+    # caller's OWN requested tool name / resource URI / prompt name (with any
+    # control/zero-width/bidi/NUL code points) to the caller and to logs BEFORE
+    # backend middleware runs. NotFoundGuard preflights the tool NAME (unknown ->
+    # fixed name-free envelope) and fixes the on_read_resource boundary; added
+    # FIRST so it is the OUTERMOST middleware. See notfound_guard.py.
+    mcp.add_middleware(NotFoundGuard())
+    # Layer 5: scrub FastMCP-core / MCP-SDK validation logs that would echo the
+    # caller-supplied name/URI at DEBUG+ (idempotent; process-global).
+    install_validation_log_filter()
+
     register_vep_tools(mcp, service_factory=service_factory, health_factory=health_factory)
     _register_health_resource(mcp, health_factory=health_factory)
     install_validation_error_handler(mcp)
+
+    # Layer 3: install the protocol-handler backstop AFTER every tool/resource is
+    # registered (so the request handlers exist). Outermost wrapper on the raw
+    # CallTool/ReadResource/GetPrompt handlers — catches the unknown-tool *return*
+    # path and any resource/prompt dispatch error that would echo the requested
+    # name/URI (the only layer covering the unknown-prompt surface; vep registers
+    # no prompts, so every prompts/get is unknown).
+    install_protocol_error_handler(mcp)
     return mcp
 
 
