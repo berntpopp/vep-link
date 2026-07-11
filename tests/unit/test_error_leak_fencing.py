@@ -217,6 +217,26 @@ async def test_batch_row_internal_error_severed() -> None:
     assert "/var/lib" not in row["message"]
 
 
+async def test_batch_error_row_clean_through_real_tool() -> None:
+    """Drive annotate_variants_batch via the real facade; both mirrors agree and are clean.
+
+    The batch error row rides inside an otherwise-successful response, so it
+    bypasses run_mcp_tool -- this confirms the per-item sanitation reaches the
+    wire in BOTH structured_content and the TextContent JSON mirror.
+    """
+    svc = await _real_service_with_recoder_error(DataNotFoundError(f"no map{_CTRL} boom"))
+    facade = create_vep_mcp(service_factory=lambda: svc)
+    result = await facade.call_tool(
+        "annotate_variants_batch", {"variants": ["rs999"], "assembly": "GRCh38"}
+    )
+    sc = structured(result)
+    mirror = _mirror(result)
+    assert sc == mirror  # the structured payload and the wire mirror are identical
+    row = sc["errors"][0]
+    _assert_clean(row["message"])
+    assert "no map" in row["message"]
+
+
 # ---------------------------------------------------------------------------
 # (B) Surface B -- health last_error snapshot (resource + tool + capabilities)
 # ---------------------------------------------------------------------------
@@ -237,8 +257,42 @@ async def test_capabilities_last_error_clean_through_real_tool() -> None:
     stub = StubService()
     facade = create_vep_mcp(service_factory=lambda: stub, health_factory=lambda: health)
 
-    data = structured(await facade.call_tool("get_capabilities", {}))
+    result = await facade.call_tool("get_capabilities", {})
+    data = structured(result)
+    mirror = _mirror(result)
+    assert data == mirror  # capabilities structured payload matches the wire mirror
     _assert_no_hostile_body(str(data["upstream"]["GRCh38"]["last_error"]))
+    _assert_no_hostile_body(str(mirror["upstream"]["GRCh38"]["last_error"]))
+
+
+async def test_health_resource_last_error_clean() -> None:
+    health = UpstreamHealth(Settings())
+    health.record_failure("GRCh38", EnsemblApiError(HOSTILE))
+    stub = StubService()
+    facade = create_vep_mcp(service_factory=lambda: stub, health_factory=lambda: health)
 
     contents = await facade.read_resource("vep://health")
     _assert_no_hostile_body(str(contents))
+
+
+class _NoRefreshHealth(UpstreamHealth):
+    """UpstreamHealth whose active probe is a no-op, so a pre-recorded stored
+    last_error survives to be surfaced by the check_upstream_health tool."""
+
+    async def refresh(self) -> None:  # type: ignore[override]
+        return None
+
+
+async def test_check_upstream_health_tool_last_error_clean() -> None:
+    """The check_upstream_health tool surfaces a severed last_error in both mirrors."""
+    health = _NoRefreshHealth(Settings())
+    health.record_failure("GRCh38", EnsemblApiError(HOSTILE))
+    stub = StubService()
+    facade = create_vep_mcp(service_factory=lambda: stub, health_factory=lambda: health)
+
+    result = await facade.call_tool("check_upstream_health", {})
+    data = structured(result)
+    mirror = _mirror(result)
+    assert data == mirror
+    _assert_no_hostile_body(str(data["upstream"]["GRCh38"]["last_error"]))
+    _assert_no_hostile_body(str(mirror["upstream"]["GRCh38"]["last_error"]))

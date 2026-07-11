@@ -60,8 +60,12 @@ async def _poll_health(monitor: UpstreamHealth, interval: float) -> None:
     while True:
         try:
             await monitor.refresh()
-        except Exception:
-            logger.debug("health_poll_failed", exc_info=True)
+        except Exception as exc:
+            # Log only the exception CLASS name -- never a traceback (exc_info) or
+            # str(exc): the probe fault can carry an upstream URL / reflected 4xx
+            # body / control-bidi code points, which exc_info would render into the
+            # debug log (an unfenced sink). The class name is enough to route it.
+            logger.debug("health_poll_failed", exc_type=type(exc).__name__)
         await asyncio.sleep(interval)
 
 
