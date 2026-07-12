@@ -77,6 +77,7 @@ def test_citations_contain_identifiers() -> None:
 def test_read_only_open_world_dict() -> None:
     assert READ_ONLY_OPEN_WORLD == {
         "readOnlyHint": True,
+        "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": True,
     }
