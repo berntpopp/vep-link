@@ -58,7 +58,7 @@ def make_url_guard(
         url = request.url
         if url.scheme != "https":
             raise DisallowedURLError("Outbound request blocked: non-https scheme.")
-        if url.username or url.password:
+        if url.userinfo:
             raise DisallowedURLError("Outbound request blocked: userinfo not permitted.")
         if (url.host or "").lower() not in allowed_hosts:
             raise DisallowedURLError("Outbound request blocked: destination host not allowlisted.")

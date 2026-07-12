@@ -79,6 +79,16 @@ async def test_guard_rejects_userinfo() -> None:
         await guard(httpx.Request("GET", "https://user:pass@rest.ensembl.org/x"))
 
 
+async def test_guard_rejects_empty_colon_at_userinfo() -> None:
+    # The empty ``:@`` form has username==password=="" but httpx exposes it as a
+    # non-empty ``userinfo`` (``b':'``); a username-or-password check would miss
+    # it. The guard rejects ANY non-empty userinfo, while a clean URL passes.
+    guard = make_url_guard(frozenset(BOTH_HOSTS))
+    with pytest.raises(DisallowedURLError):
+        await guard(httpx.Request("GET", "https://:@rest.ensembl.org/x"))
+    await guard(httpx.Request("GET", "https://rest.ensembl.org/x"))
+
+
 async def test_guard_rejects_non_allowlisted_host() -> None:
     guard = make_url_guard(frozenset(BOTH_HOSTS))
     with pytest.raises(DisallowedURLError):
