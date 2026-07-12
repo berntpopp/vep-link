@@ -29,9 +29,10 @@ from typing import Any
 
 import httpx
 
-from vep_link.api.url_guard import build_host_allowlist, make_url_guard
+from vep_link.api.url_guard import OUTBOUND_POLICY_ERROR, build_allowed_origins, make_url_guard
 from vep_link.config import Settings
 from vep_link.exceptions import (
+    DisallowedURLError,
     EnsemblApiError,
     RateLimitedError,
     ResponseTooLargeError,
@@ -43,7 +44,7 @@ from vep_link.observability.telemetry import record_upstream
 # Bounded number of redirect hops httpx will auto-follow; each hop is still
 # validated by the URL guard event-hook. Small on purpose (Ensembl REST paths do
 # not redirect in normal operation).
-_MAX_REDIRECTS = 3
+_MAX_REDIRECTS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,9 @@ class BaseHTTPClient:
         self._client_lock = asyncio.Lock()
         # Exact outbound-host allowlist DERIVED from the (operator-overridable)
         # Ensembl base URLs -- never hardcoded, so an override moves it too.
-        self._allowed_hosts = build_host_allowlist(settings.VEP_GRCH38_URL, settings.VEP_GRCH37_URL)
+        self._allowed_origins = build_allowed_origins(
+            settings.VEP_GRCH38_URL, settings.VEP_GRCH37_URL
+        )
         self._max_response_bytes = settings.MAX_RESPONSE_BYTES
 
     def _attempt_timeout(self, remaining: float) -> httpx.Timeout:
@@ -97,7 +100,7 @@ class BaseHTTPClient:
                         # RETRYABLE). Bound the hop count defensively.
                         follow_redirects=True,
                         max_redirects=_MAX_REDIRECTS,
-                        event_hooks={"request": [make_url_guard(self._allowed_hosts)]},
+                        event_hooks={"request": [make_url_guard(self._allowed_origins)]},
                     )
         return self._client
 
@@ -192,9 +195,7 @@ class BaseHTTPClient:
             async for chunk in response.aiter_bytes():
                 total += len(chunk)
                 if total > self._max_response_bytes:
-                    raise ResponseTooLargeError(
-                        f"Upstream response exceeded the {self._max_response_bytes}-byte cap."
-                    )
+                    raise ResponseTooLargeError(OUTBOUND_POLICY_ERROR)
                 parts.append(chunk)
         body = b"".join(parts)
         return json.loads(body) if body else None
@@ -237,6 +238,8 @@ class BaseHTTPClient:
             attempt_start = loop.time()
             try:
                 return await self._read_capped(send, client, self._attempt_timeout(remaining))
+            except httpx.TooManyRedirects as exc:
+                raise DisallowedURLError(OUTBOUND_POLICY_ERROR) from exc
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 status = exc.response.status_code

@@ -6,9 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-07-12
+
 ### Security
 
-- **FastMCP-core not-found reflection guard. PATCH bump to `1.0.5`.**
+- Adopted the canonical outbound HTTP Policy v1 for configured GRCh37 and
+  GRCh38 Ensembl origins. Every redirect hop is validated, decoded response
+  bodies have bounded reads, and redirect-limit failures map to fixed,
+  identifier-free policy errors. The production client is bound to the shared
+  conformance suite. Research use only.
+
+## [1.0.5] - 2026-07-11
+
+### Security
+
+- **FastMCP-core not-found reflection guard.**
   FastMCP core reflected the caller's OWN requested tool name / resource URI /
   prompt name (with any control/zero-width/bidi/NUL code points and injection
   prose) back to the caller and to logs *before* backend middleware ran. A

@@ -149,6 +149,29 @@ async def test_userinfo_redirect_raises(
         await client.aclose()
 
 
+async def test_redirect_limit_maps_to_fixed_non_retryable_policy_error(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(Settings(MAX_RETRIES=0), monkeypatch)
+    session = await client._ensure_client()
+    redirects = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal redirects
+        location = f"{GRCH38}/hop-{redirects}"
+        redirects += 1
+        return httpx.Response(302, headers={"Location": location})
+
+    session._transport = httpx.MockTransport(handler)
+    try:
+        with pytest.raises(DisallowedURLError) as captured:
+            await client.get_json(f"{GRCH38}/start")
+    finally:
+        await client.aclose()
+    assert redirects == 6
+    assert str(captured.value) == "outbound request rejected by policy"
+
+
 # -- decoded-byte cap (fail closed, non-retryable) -------------------------
 
 
@@ -174,6 +197,22 @@ async def test_over_cap_decoded_response_raises_and_is_not_retried(
         await client.aclose()
     # Deterministic: a too-large response is not retried.
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_over_cap_response_uses_fixed_policy_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(MAX_RETRIES=0, MAX_RESPONSE_BYTES=5)
+    url = f"{GRCH38}/vep/human/id/rs-fixed-error"
+    respx.get(url).mock(return_value=httpx.Response(200, content=b"abcdef"))
+    client = _client(settings, monkeypatch)
+    try:
+        with pytest.raises(ResponseTooLargeError) as captured:
+            await client.get_json(url)
+    finally:
+        await client.aclose()
+    assert str(captured.value) == "outbound request rejected by policy"
 
 
 @respx.mock
