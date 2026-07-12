@@ -13,6 +13,18 @@ from vep_link.config import Settings
 from vep_link.exceptions import DisallowedURLError, ResponseTooLargeError
 
 
+class _ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self._chunks = tuple(chunks)
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
 class _HttpPolicyAdapter:
     async def _client(self, cap: int = 64) -> BaseHTTPClient:
         client = BaseHTTPClient(
@@ -32,7 +44,8 @@ class _HttpPolicyAdapter:
             client = await self._client()
             try:
                 session = await client._ensure_client()
-                await session.event_hooks["request"][0](httpx.Request("GET", url))
+                session._transport = httpx.MockTransport(lambda _: httpx.Response(200, json={}))
+                await client.get_json(url)
             finally:
                 await client.aclose()
 
@@ -56,10 +69,7 @@ class _HttpPolicyAdapter:
                     return httpx.Response(200, json={})
 
                 session._transport = httpx.MockTransport(handler)
-                try:
-                    await session.get(url)
-                except httpx.TooManyRedirects as exc:
-                    raise DisallowedURLError("outbound request rejected by policy") from exc
+                await client.get_json(url)
             finally:
                 await client.aclose()
 
@@ -71,13 +81,9 @@ class _HttpPolicyAdapter:
             try:
                 session = await client._ensure_client()
                 session._transport = httpx.MockTransport(
-                    lambda _: httpx.Response(200, content=b"".join(chunks))
+                    lambda _: httpx.Response(200, stream=_ChunkedStream(chunks))
                 )
-
-                def send(_: httpx.AsyncClient, __: httpx.Timeout) -> object:
-                    return session.stream("GET", "https://allowed.example/resource")
-
-                await client._read_capped(send, session, client._timeout)
+                await client.get_json("https://allowed.example/resource")
             finally:
                 await client.aclose()
 

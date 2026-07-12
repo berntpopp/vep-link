@@ -149,6 +149,29 @@ async def test_userinfo_redirect_raises(
         await client.aclose()
 
 
+async def test_redirect_limit_maps_to_fixed_non_retryable_policy_error(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(Settings(MAX_RETRIES=0), monkeypatch)
+    session = await client._ensure_client()
+    redirects = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal redirects
+        location = f"{GRCH38}/hop-{redirects}"
+        redirects += 1
+        return httpx.Response(302, headers={"Location": location})
+
+    session._transport = httpx.MockTransport(handler)
+    try:
+        with pytest.raises(DisallowedURLError) as captured:
+            await client.get_json(f"{GRCH38}/start")
+    finally:
+        await client.aclose()
+    assert redirects == 6
+    assert str(captured.value) == "outbound request rejected by policy"
+
+
 # -- decoded-byte cap (fail closed, non-retryable) -------------------------
 
 

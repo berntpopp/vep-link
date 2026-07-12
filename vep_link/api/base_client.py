@@ -32,6 +32,7 @@ import httpx
 from vep_link.api.url_guard import OUTBOUND_POLICY_ERROR, build_allowed_origins, make_url_guard
 from vep_link.config import Settings
 from vep_link.exceptions import (
+    DisallowedURLError,
     EnsemblApiError,
     RateLimitedError,
     ResponseTooLargeError,
@@ -237,6 +238,8 @@ class BaseHTTPClient:
             attempt_start = loop.time()
             try:
                 return await self._read_capped(send, client, self._attempt_timeout(remaining))
+            except httpx.TooManyRedirects as exc:
+                raise DisallowedURLError(OUTBOUND_POLICY_ERROR) from exc
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 status = exc.response.status_code
