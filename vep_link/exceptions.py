@@ -56,3 +56,24 @@ class DataNotFoundError(VepLinkError):
 
 class AmbiguousMappingError(VepLinkError):
     """A liftover produced more than one mapping. Maps to ``ambiguous``."""
+
+
+class DisallowedURLError(VepLinkError):
+    """An outbound request/redirect hop violated the URL policy. NON-RETRYABLE.
+
+    Raised by the outbound URL guard (see ``vep_link.api.url_guard``) when a hop
+    -- including an auto-followed redirect -- uses a non-https scheme, carries
+    userinfo, or targets a host outside the exact allowlist. It is a
+    ``VepLinkError`` (never an ``httpx`` fault), so the base-client retry loop,
+    which retries only ``httpx`` faults, never retries it. The message is FIXED
+    and reflects no upstream-controlled value. Maps to ``output_validation_failed``.
+    """
+
+
+class ResponseTooLargeError(VepLinkError):
+    """An upstream response exceeded the decoded-byte cap. NON-RETRYABLE.
+
+    The capped read fails closed (raises) rather than truncating a partial body,
+    so a corrupt/partial JSON is never parsed. Not an ``httpx`` fault, so it is
+    never retried by the base-client retry loop. Maps to ``output_validation_failed``.
+    """

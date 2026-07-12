@@ -58,8 +58,10 @@ if TYPE_CHECKING:
 from vep_link.exceptions import (
     AmbiguousMappingError,
     DataNotFoundError,
+    DisallowedURLError,
     EnsemblApiError,
     RateLimitedError,
+    ResponseTooLargeError,
     UnsupportedContigError,
     UpstreamInputError,
     UpstreamTimeoutError,
@@ -167,6 +169,21 @@ _EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str], ...] = (
         EnsemblApiError,
         "upstream_unavailable",
         "Ensembl REST is temporarily unavailable; retry shortly.",
+    ),
+    # Outbound URL-guard / response-cap refusals (F-17). Deterministic and
+    # NON-RETRYABLE: a redirect to a non-allowlisted destination, or a response
+    # over the decoded-byte cap, will not change on retry. Classified as
+    # output_validation_failed (the upstream response could not be accepted); the
+    # exceptions carry FIXED, body-free messages so nothing upstream is reflected.
+    (
+        DisallowedURLError,
+        "output_validation_failed",
+        "The upstream redirected to a destination the server does not permit; do not retry.",
+    ),
+    (
+        ResponseTooLargeError,
+        "output_validation_failed",
+        "The upstream response exceeded the server size limit; narrow the query (fewer variants).",
     ),
 )
 

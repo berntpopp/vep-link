@@ -20,6 +20,7 @@ spliceailookup-link). ``_sleep`` is an instance method wrapping
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from datetime import UTC, datetime
@@ -28,14 +29,21 @@ from typing import Any
 
 import httpx
 
+from vep_link.api.url_guard import build_host_allowlist, make_url_guard
 from vep_link.config import Settings
 from vep_link.exceptions import (
     EnsemblApiError,
     RateLimitedError,
+    ResponseTooLargeError,
     UpstreamInputError,
     UpstreamTimeoutError,
 )
 from vep_link.observability.telemetry import record_upstream
+
+# Bounded number of redirect hops httpx will auto-follow; each hop is still
+# validated by the URL guard event-hook. Small on purpose (Ensembl REST paths do
+# not redirect in normal operation).
+_MAX_REDIRECTS = 3
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +65,10 @@ class BaseHTTPClient:
         self._semaphore = asyncio.Semaphore(max(1, settings.MAX_CONCURRENCY))
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
+        # Exact outbound-host allowlist DERIVED from the (operator-overridable)
+        # Ensembl base URLs -- never hardcoded, so an override moves it too.
+        self._allowed_hosts = build_host_allowlist(settings.VEP_GRCH38_URL, settings.VEP_GRCH37_URL)
+        self._max_response_bytes = settings.MAX_RESPONSE_BYTES
 
     def _attempt_timeout(self, remaining: float) -> httpx.Timeout:
         """Per-attempt timeout, capped to the remaining overall-deadline budget."""
@@ -79,7 +91,13 @@ class BaseHTTPClient:
                             "Accept": "application/json",
                             "User-Agent": self._settings.USER_AGENT,
                         },
+                        # Keep httpx's redirect machinery, but validate every hop
+                        # (incl. auto-followed redirects) against the exact host
+                        # allowlist; a bad hop raises DisallowedURLError (NON-
+                        # RETRYABLE). Bound the hop count defensively.
                         follow_redirects=True,
+                        max_redirects=_MAX_REDIRECTS,
+                        event_hooks={"request": [make_url_guard(self._allowed_hosts)]},
                     )
         return self._client
 
@@ -125,8 +143,8 @@ class BaseHTTPClient:
     ) -> Any:
         """GET ``url`` with ``params``, returning parsed JSON (dict or list)."""
 
-        async def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> httpx.Response:
-            return await client.get(url, params=params, headers=headers, timeout=timeout)
+        def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> Any:
+            return client.stream("GET", url, params=params, headers=headers, timeout=timeout)
 
         return await self._request(url, _send)
 
@@ -141,12 +159,45 @@ class BaseHTTPClient:
         """POST ``json_body`` as JSON to ``url``, returning parsed JSON."""
         merged = {"Content-Type": "application/json", **(headers or {})}
 
-        async def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> httpx.Response:
-            return await client.post(
-                url, json=json_body, params=params, headers=merged, timeout=timeout
+        def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> Any:
+            return client.stream(
+                "POST", url, json=json_body, params=params, headers=merged, timeout=timeout
             )
 
         return await self._request(url, _send)
+
+    # -- capped streamed read ---------------------------------------------
+
+    async def _read_capped(
+        self, send: Any, client: httpx.AsyncClient, timeout: httpx.Timeout
+    ) -> Any:
+        """Send (streaming) and return parsed JSON, capping the DECODED body.
+
+        Reads status/headers FIRST: on a ``>=400`` status it calls
+        ``raise_for_status`` WITHOUT reading the body (so the caller's fixed,
+        body-free ``_safe_upstream_input_message`` handles it and no upstream
+        prose is surfaced). On success it accumulates ``aiter_bytes`` -- httpx
+        auto-decompresses gzip, so the running total bounds *decoded* bytes --
+        and raises :class:`ResponseTooLargeError` (NON-RETRYABLE) the instant the
+        total exceeds the cap, failing closed rather than truncating. The URL
+        guard runs as the client's request event-hook, so a disallowed hop raises
+        ``DisallowedURLError`` here at connect time; neither guard exception is an
+        ``httpx`` fault, so :meth:`_request` never retries it.
+        """
+        async with send(client, timeout) as response:
+            if response.status_code >= 400:
+                response.raise_for_status()
+            total = 0
+            parts: list[bytes] = []
+            async for chunk in response.aiter_bytes():
+                total += len(chunk)
+                if total > self._max_response_bytes:
+                    raise ResponseTooLargeError(
+                        f"Upstream response exceeded the {self._max_response_bytes}-byte cap."
+                    )
+                parts.append(chunk)
+        body = b"".join(parts)
+        return json.loads(body) if body else None
 
     # -- retry loop --------------------------------------------------------
 
@@ -185,11 +236,7 @@ class BaseHTTPClient:
             retry_after: float | None = None
             attempt_start = loop.time()
             try:
-                response = await send(client, self._attempt_timeout(remaining))
-                status = response.status_code
-                if status >= 400:
-                    response.raise_for_status()
-                return response.json()
+                return await self._read_capped(send, client, self._attempt_timeout(remaining))
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 status = exc.response.status_code

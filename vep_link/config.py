@@ -162,6 +162,14 @@ class Settings(BaseSettings):
     BATCH_MAX: int = 200
     INTER_CHUNK_DELAY_MS: int = 100
 
+    # Hard cap on a single upstream response's DECODED body size (bytes). The
+    # capped read fails closed (raises ``ResponseTooLargeError``, never truncates)
+    # so a partial JSON is never parsed. httpx auto-decompresses gzip, so the cap
+    # bounds decoded bytes -- Content-Length alone is insufficient. Sized well
+    # above a 200-variant fully-annotated VEP ``region`` chunk (tens of MB); it is
+    # per-response, above the 200-result max, so chunk aggregation is unaffected.
+    MAX_RESPONSE_BYTES: int = 50 * 1024 * 1024
+
     # In-process cache. VEP/Recoder results are deterministic per
     # (input, assembly, options) so a long TTL is safe.
     CACHE_SIZE: int = 1024
