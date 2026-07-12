@@ -177,6 +177,22 @@ async def test_over_cap_decoded_response_raises_and_is_not_retried(
 
 
 @respx.mock
+async def test_over_cap_response_uses_fixed_policy_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(MAX_RETRIES=0, MAX_RESPONSE_BYTES=5)
+    url = f"{GRCH38}/vep/human/id/rs-fixed-error"
+    respx.get(url).mock(return_value=httpx.Response(200, content=b"abcdef"))
+    client = _client(settings, monkeypatch)
+    try:
+        with pytest.raises(ResponseTooLargeError) as captured:
+            await client.get_json(url)
+    finally:
+        await client.aclose()
+    assert str(captured.value) == "outbound request rejected by policy"
+
+
+@respx.mock
 @pytest.mark.parametrize("host", BOTH_HOSTS)
 async def test_response_under_cap_parses_normally(
     host: str, monkeypatch: pytest.MonkeyPatch

@@ -23,11 +23,22 @@ backend's no-reflection invariant.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import httpx
 
 from vep_link.exceptions import DisallowedURLError
+
+OUTBOUND_POLICY_ERROR = "outbound request rejected by policy"
+
+
+@dataclass(frozen=True, slots=True)
+class AllowedOrigin:
+    """A normalized configured HTTPS origin."""
+
+    host: str
+    port: int
 
 
 def build_host_allowlist(*base_urls: str) -> frozenset[str]:
@@ -44,8 +55,19 @@ def build_host_allowlist(*base_urls: str) -> frozenset[str]:
     return frozenset(hosts)
 
 
+def build_allowed_origins(*base_urls: str) -> frozenset[AllowedOrigin]:
+    """Derive exact normalized origins from configured base URL(s)."""
+    origins: set[AllowedOrigin] = set()
+    for url in base_urls:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        if host:
+            origins.add(AllowedOrigin(host.lower(), parsed.port or 443))
+    return frozenset(origins)
+
+
 def make_url_guard(
-    allowed_hosts: frozenset[str],
+    allowed_origins: frozenset[AllowedOrigin] | frozenset[str],
 ) -> Callable[[httpx.Request], Awaitable[None]]:
     """Return an async httpx *request* event-hook enforcing the per-hop policy.
 
@@ -54,13 +76,18 @@ def make_url_guard(
     userinfo, or a host outside ``allowed_hosts`` (exact match only).
     """
 
+    normalized = frozenset(
+        AllowedOrigin(origin, 443) if isinstance(origin, str) else origin
+        for origin in allowed_origins
+    )
+
     async def _guard(request: httpx.Request) -> None:
         url = request.url
         if url.scheme != "https":
-            raise DisallowedURLError("Outbound request blocked: non-https scheme.")
+            raise DisallowedURLError(OUTBOUND_POLICY_ERROR)
         if url.userinfo:
-            raise DisallowedURLError("Outbound request blocked: userinfo not permitted.")
-        if (url.host or "").lower() not in allowed_hosts:
-            raise DisallowedURLError("Outbound request blocked: destination host not allowlisted.")
+            raise DisallowedURLError(OUTBOUND_POLICY_ERROR)
+        if AllowedOrigin((url.host or "").lower(), url.port or 443) not in normalized:
+            raise DisallowedURLError(OUTBOUND_POLICY_ERROR)
 
     return _guard
