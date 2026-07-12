@@ -25,8 +25,10 @@ RUN mkdir -p /home/app/web
 WORKDIR /app
 COPY uv.lock pyproject.toml README.md ./
 
-RUN pip install --upgrade pip uv && \
-    uv sync --frozen --no-dev --active --no-install-project
+# Digest-pinned uv from the official image (reproducible; no floating installer).
+COPY --from=ghcr.io/astral-sh/uv:0.8.7@sha256:1e26f9a868360eeb32500a35e05787ffff3402f01a8dc8168ef6aee44aef0aab /uv /usr/local/bin/uv
+
+RUN uv sync --frozen --no-dev --active --no-install-project
 
 # --- Production Stage ---
 FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS production
