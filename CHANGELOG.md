@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-07-13
+
+### Added
+
+- Adopt the GeneFoundry container release standard with SHA-pinned reusable
+  container CI/release callers, release metadata, digest-only production Compose,
+  and complete OCI image labels. Research use only.
+
 ## [1.0.6] - 2026-07-12
 
 ### Security

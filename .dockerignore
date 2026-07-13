@@ -23,6 +23,9 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.nox/
+.tox/
+.cache/
 .dmypy.json
 htmlcov/
 .coverage
@@ -37,6 +40,12 @@ coverage.xml
 docs/
 scripts/
 tests/
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.feather
 
 docker/
 Dockerfile*

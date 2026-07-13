@@ -30,20 +30,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.7@sha256:1e26f9a868360eeb32500a35e05787ffff
 
 RUN uv sync --frozen --no-dev --active --no-install-project
 
-# --- Production Stage ---
-FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS production
-
-
-# Runtime identity. The deploy builds from a source checkout rather than pulling a
-# registry image, so there is no immutable OCI digest to pin; stamping the exact
-# commit into the image is what lets an operator prove the running container was
-# built from the revision the router's release inventory pins, instead of trusting
-# a moving `main`. VCS_REF is unprefixed on purpose: a <SERVICE>_-prefixed name
-# would land in the pydantic settings namespace.
-ARG VCS_REF=unknown
-LABEL org.opencontainers.image.source="https://github.com/berntpopp/vep-link" \
-      org.opencontainers.image.revision="${VCS_REF}"
-ENV VCS_REF="${VCS_REF}"
+# --- Prepared Stage ---
+FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS prepared
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -53,7 +41,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VEP_LINK_MCP_HOST=0.0.0.0 \
     VEP_LINK_MCP_PORT=8000 \
     VEP_LINK_MCP_PATH=/mcp \
-    TMPDIR=/tmp/vep-link
+    TMPDIR=/tmp
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -63,8 +51,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd --system app && \
     useradd --system --gid app --home /home/app --create-home app && \
-    mkdir -p /tmp/vep-link /var/cache/vep-link && \
-    chown -R app:app /tmp/vep-link /var/cache/vep-link /home/app
+    chown -R app:app /home/app
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -74,6 +61,47 @@ COPY --chown=app:app ./vep_link ./vep_link
 COPY --chown=app:app ./pyproject.toml ./README.md ./
 
 RUN /opt/venv/bin/pip install -e . --no-deps
+
+RUN rm -rf /root/.cache/pip /usr/local/lib/python*/ensurepip \
+    && find / -xdev -type d -name __pycache__ -prune -exec rm -rf '{}' + \
+    && find / -xdev -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+RUN find / -xdev -perm /6000 -exec chmod a-s '{}' + \
+    && test -z "$(find / -xdev -perm /6000 -print -quit)"
+RUN actual="$(find / -xdev -type f -links +1 -printf '%i %p\n' | sort -k2,2)" \
+    && expected="$(printf '%s %s\n%s %s\n' \
+         "$(stat -c '%i' /usr/bin/perl)" /usr/bin/perl \
+         "$(stat -c '%i' /usr/bin/perl5.40.1)" /usr/bin/perl5.40.1 | sort -k2,2)" \
+    && { test "$actual" = "$expected" || { printf 'unexpected hardlinks:\n%s\n' "$actual"; exit 1; }; } \
+    && rm -f /usr/bin/perl5.40.1
+
+# --- Production Stage ---
+FROM scratch AS production
+COPY --from=prepared / /
+
+ARG APP_VERSION=0.0.0
+ARG VCS_REF=unknown
+ARG BUILD_DATE=1970-01-01T00:00:00Z
+LABEL org.opencontainers.image.title="vep-link" \
+      org.opencontainers.image.description="GeneFoundry MCP/API server for Ensembl VEP and Variant Recoder research data" \
+      org.opencontainers.image.url="https://github.com/berntpopp/vep-link" \
+      org.opencontainers.image.source="https://github.com/berntpopp/vep-link" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="GeneFoundry"
+ENV VCS_REF="${VCS_REF}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH="/home/app/web" \
+    VEP_LINK_MCP_TRANSPORT=unified \
+    VEP_LINK_MCP_HOST=0.0.0.0 \
+    VEP_LINK_MCP_PORT=8000 \
+    VEP_LINK_MCP_PATH=/mcp \
+    TMPDIR=/tmp
+
+WORKDIR /home/app/web
 
 USER app
 
