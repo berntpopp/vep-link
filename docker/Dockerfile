@@ -34,15 +34,18 @@ RUN uv sync --frozen --no-dev --active --no-install-project
 FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a27986facfc3355c1 AS production
 
 
-# Runtime identity. The deploy builds from a source checkout rather than pulling a
-# registry image, so there is no immutable OCI digest to pin; stamping the exact
-# commit into the image is what lets an operator prove the running container was
-# built from the revision the router's release inventory pins, instead of trusting
-# a moving `main`. VCS_REF is unprefixed on purpose: a <SERVICE>_-prefixed name
-# would land in the pydantic settings namespace.
+ARG APP_VERSION=0.0.0
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.source="https://github.com/berntpopp/vep-link" \
-      org.opencontainers.image.revision="${VCS_REF}"
+ARG BUILD_DATE=1970-01-01T00:00:00Z
+LABEL org.opencontainers.image.title="vep-link" \
+      org.opencontainers.image.description="GeneFoundry MCP/API server for Ensembl VEP and Variant Recoder research data" \
+      org.opencontainers.image.url="https://github.com/berntpopp/vep-link" \
+      org.opencontainers.image.source="https://github.com/berntpopp/vep-link" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.vendor="GeneFoundry"
 ENV VCS_REF="${VCS_REF}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -53,7 +56,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     VEP_LINK_MCP_HOST=0.0.0.0 \
     VEP_LINK_MCP_PORT=8000 \
     VEP_LINK_MCP_PATH=/mcp \
-    TMPDIR=/tmp/vep-link
+    TMPDIR=/tmp
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -63,8 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN groupadd --system app && \
     useradd --system --gid app --home /home/app --create-home app && \
-    mkdir -p /tmp/vep-link /var/cache/vep-link && \
-    chown -R app:app /tmp/vep-link /var/cache/vep-link /home/app
+    chown -R app:app /home/app
 
 COPY --from=builder /opt/venv /opt/venv
 
