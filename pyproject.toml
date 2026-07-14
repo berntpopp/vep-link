@@ -107,10 +107,6 @@ line-ending = "lf"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*" = ["S101", "T20"]
-# scripts/check_readme.py is the GeneFoundry README Standard v1 linter, copied
-# verbatim into every fleet repo (never forked per-repo), so the lint config
-# accommodates it. The flagged zip() is preceded by an explicit length check.
-"scripts/check_readme.py" = ["B905"]
 
 [tool.mypy]
 python_version = "3.12"
