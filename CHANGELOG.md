@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-07-14
+
+### Changed
+
+- **The NPM deployment pulls the released image instead of building from source.**
+  `docker/docker-compose.npm.yml` carried `build:`, so a deploy rebuilt the image on the
+  server even though CI had already published an attested, digest-addressable image to
+  GHCR — the published image was never consumed. The overlay now requires
+  `VEP_LINK_IMAGE` pinned to a digest and fails closed when it is unset. Nothing else
+  changed: `container_name`, the Compose project name, the healthcheck, networks, tmpfs
+  and `expose` are all preserved, so the deployed topology is untouched. Research use
+  only.
+
 ## [1.0.8] - 2026-07-13
 
 ### Fixed
