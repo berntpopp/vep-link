@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [1.0.9] - 2026-07-14
 
 ### Changed
@@ -16,8 +18,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   changed: `container_name`, the Compose project name, the healthcheck, networks, tmpfs
   and `expose` are all preserved, so the deployed topology is untouched. Research use
   only.
-
-## [Unreleased]
 
 ## [1.0.8] - 2026-07-13
 
