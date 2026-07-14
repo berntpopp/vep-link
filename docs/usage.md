@@ -271,8 +271,9 @@ vep-link health --url http://127.0.0.1:8000
 ## Configuration
 
 All settings use the `VEP_LINK_` env prefix (and an optional `.env`; copy
-`.env.example` to `.env`). See the [README](../README.md#configuration) for the
-full env-var table, or inspect the resolved configuration:
+`.env.example` to `.env`). See [configuration](configuration.md) for the full
+env-var table and the Host/Origin/CORS guards, or inspect the resolved
+configuration:
 
 ```bash
 vep-link config --validate
