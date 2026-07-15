@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from tests.conftest import StubService
 from tests.fixtures import VEP_REGION_MISSENSE
 from vep_link.exceptions import DataNotFoundError
@@ -425,26 +427,37 @@ async def test_each_tool_is_invocable_with_minimal_args(facade) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_unknown_argument_error_names_the_offending_parameter(facade) -> None:
-    """An invalid-arguments call must NAME the parameter (Response-Envelope §2).
+ALL_TOOL_NAMES = (
+    "get_capabilities",
+    "resolve_variant",
+    "recode_variant",
+    "annotate_variant",
+    "annotate_variants_batch",
+    "liftover_variant",
+    "check_upstream_health",
+)
+
+
+@pytest.mark.parametrize("name", ALL_TOOL_NAMES)
+async def test_unknown_argument_error_names_the_offending_parameter(name: str, facade) -> None:
+    """EVERY tool's invalid-arguments error must NAME the parameter (Response-Envelope §2).
 
     The behaviour gate's "names the offending or the valid parameters" check: a
     model can only self-correct if the envelope carries a concrete parameter.
-    Regression for get_capabilities / recode_variant / check_upstream_health,
-    which previously returned only "N error(s)" with nothing to act on.
+    Derived across ALL 7 tools so a single tool reverting to a fieldless error is
+    caught (it previously passed while testing only 3).
     """
     from fastmcp.tools import ToolResult
 
-    for name in ("get_capabilities", "recode_variant", "check_upstream_health"):
-        result = await facade.call_tool(name, {"__nope__": "x"})
-        assert isinstance(result, ToolResult)
-        assert result.is_error is True  # MCP-native isError on the wire
-        env = structured(result)
-        assert env["success"] is False
-        assert env["error_code"] == "invalid_input"  # never not_found
-        # The offending arg is named in the message AND carried structurally.
-        assert "__nope__" in env["message"]
-        assert env["field"] and "__nope__" in env["field"]
+    result = await facade.call_tool(name, {"__nope__": "x"})
+    assert isinstance(result, ToolResult)
+    assert result.is_error is True  # MCP-native isError on the wire
+    env = structured(result)
+    assert env["success"] is False
+    assert env["error_code"] == "invalid_input"  # never not_found
+    # The offending arg is named in the message AND carried structurally.
+    assert "__nope__" in env["message"]
+    assert env["field"] and "__nope__" in env["field"]
 
 
 async def test_no_tool_publishes_an_output_schema(facade) -> None:
@@ -490,3 +503,98 @@ async def test_total_tool_surface_stays_under_budget(facade) -> None:
     assert total_chars < 40_000, f"surface too large: {total_chars} chars ({per_tool})"
     oversized = {n: c for n, c in per_tool.items() if c >= 4_800}
     assert not oversized, f"tool(s) over ~1,200-token budget: {oversized}"
+
+
+# ---------------------------------------------------------------------------
+# Codex re-review rework: closed vocabularies + internal-not-notfound boundary
+# ---------------------------------------------------------------------------
+
+
+async def test_recode_unknown_fields_value_errors_not_silently_empty(facade) -> None:
+    """`fields` is a closed projection vocabulary — an unknown token must ERROR.
+
+    Regression for the silent-empty filter: fields="bogus" previously returned
+    success:true with identity-only rows. It must now be invalid_input NAMING
+    `fields` (schema subset of runtime).
+    """
+    result = await facade.call_tool("recode_variant", {"variants": ["rs6025"], "fields": "bogus"})
+    env = structured(result)
+    assert env["success"] is False
+    assert env["error_code"] == "invalid_input"
+    assert "fields" in env["message"]
+    assert "bogus" in env["message"]
+
+
+async def test_recode_valid_fields_value_is_accepted(facade) -> None:
+    """A control call with a VALID field token must NOT be rejected."""
+    result = await facade.call_tool(
+        "recode_variant", {"variants": ["rs6025"], "fields": "hgvsg,spdi"}
+    )
+    env = structured(result)
+    assert env.get("success") is True
+
+
+@pytest.mark.parametrize("tool", ["annotate_variant", "annotate_variants_batch"])
+async def test_vep_options_unknown_key_errors_naming_the_key(tool: str, facade) -> None:
+    """An out-of-allowlist vep_options KEY must be invalid_input naming vep_options.
+
+    Schema advertises a free dict[str,str] but the runtime honours only the
+    allowlist keys; an unknown key must not slip through silently.
+    """
+    args: dict[str, Any] = {"vep_options": {"NoSuchFlag": "1"}}
+    args["variants" if tool == "annotate_variants_batch" else "variant"] = (
+        ["1-1000-A-T"] if tool == "annotate_variants_batch" else "1-1000-A-T"
+    )
+    result = await facade.call_tool(tool, args)
+    env = structured(result)
+    assert env["success"] is False
+    assert env["error_code"] == "invalid_input"
+    assert "vep_options" in env["message"]
+    assert "NoSuchFlag" in env["message"]
+
+
+async def test_existing_tool_internal_fault_maps_to_internal_not_notfound() -> None:
+    """A KNOWN tool whose internal work fails maps to `internal`, never `not_found`.
+
+    A health_factory that raises fails resolve_variant BEFORE its run_mcp_tool
+    boundary; the protocol backstop (which wraps the JSON-RPC CallTool handler, so
+    it must be exercised through a real client, not facade.call_tool) must classify
+    this by the (real) tool name as `internal`, not answer "the requested tool is
+    not available" (not_found) — which would tell the model to strike an existing
+    tool from its list.
+    """
+    from fastmcp import Client
+
+    from vep_link.mcp.facade import create_vep_mcp
+
+    def boom() -> Any:
+        raise RuntimeError("health wiring blew up")
+
+    facade = create_vep_mcp(service_factory=lambda: StubService(), health_factory=boom)
+    async with Client(facade) as client:
+        result = await client.call_tool(
+            "resolve_variant", {"variant": "rs6025"}, raise_on_error=False
+        )
+    assert result.is_error is True
+    env = result.structured_content or {}
+    assert env.get("error_code") == "internal"
+    assert env.get("error_code") != "not_found"
+    # And it must NOT reflect the requested tool name back as "unavailable".
+    assert "not available" not in (env.get("message") or "")
+
+
+async def test_get_capabilities_internal_fault_maps_to_internal() -> None:
+    """get_capabilities now has an error boundary: a health snapshot fault -> internal."""
+    from vep_link.mcp.facade import create_vep_mcp
+
+    class BoomHealth:
+        def snapshot(self) -> Any:
+            raise RuntimeError("snapshot blew up")
+
+    facade = create_vep_mcp(
+        service_factory=lambda: StubService(), health_factory=lambda: BoomHealth()
+    )
+    result = await facade.call_tool("get_capabilities", {})
+    env = structured(result)
+    assert env.get("success") is False
+    assert env["error_code"] == "internal"

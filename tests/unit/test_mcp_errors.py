@@ -40,10 +40,10 @@ from vep_link.mcp.errors import (
     ERROR_CODES,
     McpErrorContext,
     _classify,
-    install_validation_error_handler,
     mcp_tool_error,
     run_mcp_tool,
 )
+from vep_link.mcp.validation_errors import install_validation_error_handler
 
 
 def _envelope(result: dict[str, Any] | ToolResult) -> dict[str, Any]:

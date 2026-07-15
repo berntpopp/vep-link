@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any, cast
 
 import mcp.types
@@ -166,9 +167,48 @@ def _is_structured_envelope(call_result: mcp.types.CallToolResult) -> bool:
 
 
 def _fixed_tool_not_found_result() -> mcp.types.ServerResult:
-    """A fixed, input-free ServerResult for an unknown/failed tool dispatch."""
+    """A fixed, input-free ServerResult for a genuinely UNKNOWN tool name."""
     result = unknown_tool_result().to_mcp_result()
     return mcp.types.ServerResult(cast(mcp.types.CallToolResult, result))
+
+
+def _fixed_internal_error_result() -> mcp.types.ServerResult:
+    """A fixed, input-free ``internal`` ServerResult for a KNOWN tool's raw fault.
+
+    A raw ``isError`` escaping an EXISTING tool (a fault BEFORE that tool's own
+    ``run_mcp_tool`` boundary, masked by FastMCP) must map to ``internal`` with a
+    correlation id -- NEVER ``not_found``. Reporting a real tool as "not
+    available" tells the model to strike it from its list and never call it
+    again (the exact mislabel this backstop must avoid).
+    """
+    correlation_id = uuid.uuid4().hex[:12]
+    logger.error("mcp_tool_internal_error", correlation_id=correlation_id)
+    envelope = mcp_tool_error(
+        code="internal",
+        message=(
+            f"Internal error handling the tool call (correlation_id={correlation_id}). Retry later."
+        ),
+        recovery=(
+            "Unexpected server error; retry later. Reference the correlation id if reporting."
+        ),
+        ctx=McpErrorContext(tool_name=""),
+        request_id=correlation_id,
+    )
+    result = ToolResult(structured_content=envelope, is_error=True).to_mcp_result()
+    return mcp.types.ServerResult(cast(mcp.types.CallToolResult, result))
+
+
+async def _tool_name_is_known(server: Any, request: Any) -> bool:
+    """Whether the CallTool request targets a tool this server actually registers."""
+    name = getattr(getattr(request, "params", None), "name", None)
+    if not isinstance(name, str):
+        return False
+    try:
+        return await server.get_tool(name) is not None
+    except Exception:
+        # Resolution failure: treat as unknown so we fall back to the name-free
+        # not_found rather than asserting an internal fault we cannot confirm.
+        return False
 
 
 def install_protocol_error_handler(mcp_server: Any) -> None:
@@ -187,24 +227,32 @@ def install_protocol_error_handler(mcp_server: Any) -> None:
             request: mcp.types.CallToolRequest,
             *,
             _orig: Any = call_tool,
+            _server: Any = mcp_server,
         ) -> mcp.types.ServerResult:
             try:
                 result = cast(mcp.types.ServerResult, await _orig(request))
             except FastMCPNotFoundError:
                 # Unknown-tool *raise* drift (should not reach here once Layer 1
-                # is active) — answer with the fixed name-free envelope.
+                # is active) — a truly-unknown NAME, so the fixed not_found stands
+                # only if the name is in fact not registered.
+                if await _tool_name_is_known(_server, request):
+                    return _fixed_internal_error_result()
                 return _fixed_tool_not_found_result()
             # FastMCP *returns* an isError CallToolResult with a raw plain-text
-            # message ("Unknown tool: '<name>'") for an unknown tool; replace any
-            # isError result that is NOT one of our structured envelopes. A masked
-            # runtime ToolError is a FastMCPError (raised, not returned) and does
-            # not pass through here, so this only catches the name-echoing return.
+            # message for an unknown tool ("Unknown tool: '<name>'") OR a masked
+            # internal fault of a KNOWN tool. Replace any isError result that is
+            # NOT one of our structured envelopes — but route it by whether the
+            # tool NAME is real: an existing tool's masked fault -> `internal`
+            # (never not_found); only a genuinely-unknown name -> not_found. The
+            # not-found backstop must fire ONLY for truly-unknown tool names.
             root = getattr(result, "root", None)
             if (
                 isinstance(root, mcp.types.CallToolResult)
                 and root.isError
                 and not _is_structured_envelope(root)
             ):
+                if await _tool_name_is_known(_server, request):
+                    return _fixed_internal_error_result()
                 return _fixed_tool_not_found_result()
             return result
 

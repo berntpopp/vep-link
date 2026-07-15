@@ -63,6 +63,25 @@ Research use only.
 - `liftover_variant` was un-probeable by the behaviour gate (UNGATED): its required
   `from_assembly` / `to_assembly` enum parameters carried no `examples`. Examples added
   (Tool-Schema Documentation Standard S2), so the tool is now fully gated.
+- **`recode_variant`'s `fields` was a silently-empty filter.** `fields` is a
+  comma-separated projection over the closed set `vcf_string, hgvsg, hgvsc, hgvsp, spdi`,
+  but an unknown token (e.g. `fields="bogus"`) previously returned `success: true` with
+  identity-only rows. An unknown token is now rejected as `invalid_input` naming `fields`
+  and the allowed set (schema is a subset of the runtime).
+- **An out-of-allowlist `vep_options` key is rejected naming the key.** The runtime
+  honours only `VEP_OPTION_ALLOWLIST`; an unknown key (e.g. `{"NoSuchFlag": "1"}`) now
+  returns `invalid_input` naming `vep_options` and the offending key on both
+  `annotate_variant` and `annotate_variants_batch` (previously the schema was wider than
+  the runtime).
+- **A genuine internal fault of an existing tool no longer mislabels as `not_found`.**
+  `get_capabilities` now runs inside the `run_mcp_tool` error boundary, and the protocol
+  backstop routes a known tool's masked fault to `internal` (with a correlation id) while
+  reserving `not_found` for genuinely-unknown tool names — so a health-wiring failure on
+  an existing tool can no longer tell the model "the requested tool is not available."
+- **Batch and single-call paths now share ONE exception classifier**
+  (`canonical_error_code`). The duplicated batch table had omitted `DisallowedURLError` /
+  `ResponseTooLargeError`, so those lost `error_subcode="output_validation_failed"` in
+  batch; every error type now maps identically in both paths.
 
 ## [1.0.9] - 2026-07-14
 

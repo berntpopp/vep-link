@@ -19,6 +19,7 @@ from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta
 from vep_link.mcp.tools._common import ensure_upstream_available, new_request_id
 from vep_link.models.enums import GenomeBuild
+from vep_link.services._recoding import validate_recode_fields
 
 
 def register_recode_tools(
@@ -58,9 +59,13 @@ def register_recode_tools(
             Field(
                 default=None,
                 description=(
-                    "Optional comma-separated Variant Recoder field filter "
-                    "(e.g. 'hgvsg,spdi,vcf_string'); omit for the default set."
+                    "Optional comma-separated projection filter over the closed "
+                    "vocabulary vcf_string, hgvsg, hgvsc, hgvsp, spdi "
+                    "(e.g. 'hgvsg,spdi,vcf_string'); omit for the full set. An "
+                    "unknown field is rejected as invalid_input (it is not "
+                    "silently dropped)."
                 ),
+                examples=["hgvsg,spdi", "vcf_string"],
             ),
         ] = None,
     ) -> dict[str, Any]:
@@ -69,6 +74,7 @@ def register_recode_tools(
         health = health_factory() if health_factory else None
 
         async def call() -> dict[str, Any]:
+            validate_recode_fields(fields)
             ensure_upstream_available(health, assembly)
             service = service_factory()
             results = await service.recode(variants, GenomeBuild(assembly), fields=fields)

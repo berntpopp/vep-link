@@ -40,7 +40,9 @@ from vep_link.api.health import UpstreamHealth
 from vep_link.config import Settings
 from vep_link.exceptions import (
     DataNotFoundError,
+    DisallowedURLError,
     EnsemblApiError,
+    ResponseTooLargeError,
     UpstreamTimeoutError,
 )
 from vep_link.mcp._sanitize import FORBIDDEN_CODEPOINTS
@@ -297,3 +299,31 @@ async def test_check_upstream_health_tool_last_error_clean() -> None:
     assert data == mirror
     _assert_no_hostile_body(str(data["upstream"]["GRCh38"]["last_error"]))
     _assert_no_hostile_body(str(mirror["upstream"]["GRCh38"]["last_error"]))
+
+
+# ---------------------------------------------------------------------------
+# (C) Batch and single-call share ONE classifier — no error type drifts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("exc", [DisallowedURLError("nope"), ResponseTooLargeError("too big")])
+async def test_batch_output_validation_maps_like_single_call(exc: Exception) -> None:
+    """The batch per-input classifier must map every error type like the single path.
+
+    A duplicated batch table previously OMITTED DisallowedURLError /
+    ResponseTooLargeError, so they lost error_subcode="output_validation_failed"
+    in batch. Batch now shares canonical_error_code, so the batch row carries the
+    SAME canonical code + subcode the boundary would (internal / output_validation_failed).
+    """
+    from vep_link.mcp.errors import canonical_error_code
+    from vep_link.models.enums import GenomeBuild
+
+    # The single-call path's canonical mapping is the reference.
+    code, subcode = canonical_error_code(exc)
+    assert (code, subcode) == ("internal", "output_validation_failed")
+
+    svc = await _real_service_with_recoder_error(exc)
+    out = await svc.annotate_batch(["rs999"], GenomeBuild.GRCH38)
+    row = out["errors"][0]
+    assert row["error_code"] == code == "internal"
+    assert row["error_subcode"] == subcode == "output_validation_failed"

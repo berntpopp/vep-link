@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from vep_link.exceptions import UpstreamInputError
+
 # A canonical genomic VCF string: contig-pos-ref-alt, ACGT alleles only.
 _VCF_STRING_RE = re.compile(r"^[0-9XYM]+-\d+-[ACGT]+-[ACGT]+$")
 
@@ -95,13 +97,37 @@ def aggregate_recode_entry(
     return result
 
 
+def validate_recode_fields(fields: str | None) -> None:
+    """Reject any ``fields`` token outside the closed projection vocabulary.
+
+    ``fields`` is a comma-separated projection filter whose runtime vocabulary is
+    exactly :data:`_RECODE_FIELDS` (the five aggregated HGVS/SPDI/VCF views). An
+    UNDECLARED token (e.g. ``fields="bogus"``) previously produced identity-only
+    rows with ``success: true`` -- a silently-empty filter. Raising
+    :class:`~vep_link.exceptions.UpstreamInputError` (-> ``invalid_input``) NAMES
+    ``fields`` and the allowed set so the model can self-correct instead of
+    receiving a false empty result. Schema stays a subset of the runtime.
+    """
+    if not fields:
+        return
+    requested = [f.strip() for f in fields.split(",") if f.strip()]
+    bad = [f for f in requested if f not in _RECODE_FIELDS]
+    if bad:
+        raise UpstreamInputError(
+            f"unknown 'fields' value(s) {bad}; allowed recode fields are "
+            f"{sorted(_RECODE_FIELDS)} (comma-separated)"
+        )
+
+
 def project_recode_fields(result: dict[str, Any], fields: str | None) -> dict[str, Any]:
     """Trim an aggregated recode result to the caller's requested ``fields``.
 
     Client-side enforcement of the documented filter: Ensembl may ignore or
     partially honor the upstream ``fields`` param, so the contract is enforced
     here. ``input``/``id`` always survive. ``fields=None`` returns ``result``
-    unchanged (the full set).
+    unchanged (the full set). Callers MUST pre-validate with
+    :func:`validate_recode_fields` so an unknown token errors rather than
+    silently emptying the projection.
     """
     if fields is None:
         return result

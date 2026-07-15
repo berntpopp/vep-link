@@ -39,12 +39,9 @@ The error-code -> recovery mapping is centralized here (mirroring the
   client-facing message, and logged alongside the real exception so an operator
   can join the two from logs.
 
-``install_validation_error_handler`` adapts the spliceailookup pattern to the
-FastMCP build in use: it wraps each registered tool's ``run`` so a FastMCP /
-pydantic argument-validation failure returns the same flat ``invalid_input``
-envelope (also wrapped in an ``is_error=True`` ``ToolResult``) instead of an
-opaque framework error. The FastMCP internals are probed defensively so the
-function is import-safe and a best-effort no-op if the API differs.
+FastMCP argument-validation failures are converted to the same flat
+``invalid_input`` frame by ``install_validation_error_handler`` in the sibling
+:mod:`vep_link.mcp.validation_errors` module (extracted for the 600-LOC budget).
 """
 
 from __future__ import annotations
@@ -56,7 +53,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.tools import ToolResult
 
 if TYPE_CHECKING:
@@ -246,6 +242,23 @@ def _classify(exc: BaseException) -> tuple[str, str | None, str] | None:
         if isinstance(exc, exc_type):
             return code, subcode, recovery
     return None
+
+
+def canonical_error_code(exc: BaseException) -> tuple[str, str | None]:
+    """Return the ``(canonical_code, subcode)`` for any exception (never raises).
+
+    The SINGLE source of truth for exception -> error_code classification, shared
+    by the MCP error boundary (:func:`run_mcp_tool`) and the batch per-input
+    classifier (:mod:`vep_link.services.vep_service`) so the two can never drift
+    (e.g. a batch path silently omitting ``DisallowedURLError`` /
+    ``ResponseTooLargeError`` and mislabelling them). An unmapped exception is
+    ``("internal", None)``.
+    """
+    classified = _classify(exc)
+    if classified is None:
+        return "internal", None
+    code, subcode, _recovery = classified
+    return code, subcode
 
 
 def _recovery_action(code: str, retryable: bool) -> str:
@@ -474,127 +487,3 @@ def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float
     code = str(envelope.get("error_code", "internal"))
     METRICS.record_tool_call(ctx.tool_name, outcome="error", code=code, elapsed_ms=elapsed_ms)
     return ToolResult(structured_content=envelope, is_error=True)
-
-
-def install_validation_error_handler(mcp: Any) -> None:
-    """Make FastMCP argument-validation failures return a flat ``invalid_input`` frame.
-
-    Adapts the spliceailookup pattern to the local FastMCP build: each registered
-    tool's ``run`` is wrapped so a pydantic ``ValidationError`` (raised when a
-    client passes arguments that violate the tool schema) is converted into the
-    same flat Response-Envelope Standard v1 ``invalid_input`` frame that
-    :func:`run_mcp_tool` builds (wrapped in an ``is_error=True`` ``ToolResult``)
-    rather than surfacing as an opaque framework error.
-
-    The FastMCP internals are probed defensively and ``pydantic`` is imported
-    lazily, so this is import-safe and a best-effort no-op when the API differs
-    (e.g. passed a non-FastMCP stub). It is idempotent: already-wrapped tools
-    are skipped.
-    """
-    try:  # lazy + defensive: never fail at import or on a foreign object.
-        from pydantic import ValidationError as PydanticValidationError
-    except Exception:  # best-effort; pydantic is always present in prod.
-        return
-
-    def _offending_fields(exc: BaseException) -> list[str]:
-        """Names of the offending argument(s), walking to the pydantic error.
-
-        For a missing required argument the loc is the required field name; for an
-        unknown/extra argument (``extra='forbid'``) it is the rejected key. Either
-        way the model gets a concrete parameter to act on. FastMCP re-raises the
-        pydantic error as its own ``ValidationError`` with the original in
-        ``__cause__``, so the chain is walked.
-        """
-        seen: set[int] = set()
-        err: BaseException | None = exc
-        while err is not None and id(err) not in seen:
-            seen.add(id(err))
-            errors_fn = getattr(err, "errors", None)
-            if callable(errors_fn):
-                try:
-                    raw = errors_fn()
-                except Exception:
-                    raw = None
-                names: list[str] = []
-                for item in raw or []:
-                    loc = item.get("loc") if isinstance(item, dict) else None
-                    if loc:
-                        names.append(str(loc[-1]))
-                if names:
-                    return list(dict.fromkeys(names))  # dedupe, preserve order
-            err = getattr(err, "__cause__", None)
-        return []
-
-    def _declared_params(tool: Any) -> list[str]:
-        """Declared input-parameter names for ``tool`` (the valid arguments)."""
-        schema = getattr(tool, "parameters", None)
-        if isinstance(schema, dict):
-            props = schema.get("properties")
-            if isinstance(props, dict):
-                return sorted(props.keys())
-        return []
-
-    components: dict[Any, Any] = {}
-    local_provider = getattr(mcp, "_local_provider", None)
-    provider_components = getattr(local_provider, "_components", None)
-    if isinstance(provider_components, dict):
-        components.update(provider_components)
-    # Older FastMCP builds expose tools under a _tool_manager._tools dict.
-    tool_manager = getattr(mcp, "_tool_manager", None)
-    legacy_tools = getattr(tool_manager, "_tools", None)
-    if isinstance(legacy_tools, dict):
-        components.update(legacy_tools)
-
-    for tool in components.values():
-        if not hasattr(tool, "run") or getattr(tool, "_vep_validation_wrapped", False):
-            continue
-        original_run = tool.run
-        tool_label = str(getattr(tool, "name", "unknown"))
-        tool_params = _declared_params(tool)
-
-        async def wrapped_run(
-            arguments: dict[str, Any],
-            *,
-            _original_run: Callable[[dict[str, Any]], Awaitable[Any]] = original_run,
-            _tool_name: str = tool_label,
-            _allowed: list[str] = tool_params,
-        ) -> Any:
-            try:
-                return await _original_run(arguments)
-            except (PydanticValidationError, FastMCPValidationError) as exc:
-                ctx = McpErrorContext(tool_name=_tool_name)
-                fields = _offending_fields(exc)
-                # Name the offending parameter(s) IN the message AND carry them as a
-                # structured `field` (plus the valid `allowed_values`) so a model can
-                # self-correct instead of guessing (Response-Envelope §2; the
-                # behaviour gate's "names the offending or the valid parameters").
-                if fields:
-                    named = ", ".join(fields)
-                    message = f"Invalid arguments for {_tool_name}: check parameter(s): {named}."
-                else:
-                    error_count = (
-                        exc.error_count() if isinstance(exc, PydanticValidationError) else 1
-                    )
-                    message = f"Invalid arguments for {_tool_name}: {error_count} error(s)."
-                recovery = "Fix the tool arguments to match the schema"
-                if _allowed:
-                    recovery += f"; accepted parameters: {', '.join(_allowed)}"
-                recovery += "; call get_capabilities for the full contract."
-                envelope = mcp_tool_error(
-                    code="invalid_input",
-                    message=message,
-                    recovery=recovery,
-                    ctx=ctx,
-                )
-                if fields:
-                    envelope["field"] = fields
-                if _allowed:
-                    envelope["allowed_values"] = _allowed
-                return ToolResult(structured_content=envelope, is_error=True)
-
-        try:
-            object.__setattr__(tool, "run", wrapped_run)
-            object.__setattr__(tool, "_vep_validation_wrapped", True)
-        except Exception as exc:  # frozen/immutable tool: skip it, don't fail install.
-            logger.debug("validation_handler_skip", tool=tool_label, exc_type=type(exc).__name__)
-            continue

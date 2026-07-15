@@ -33,15 +33,12 @@ from vep_link.config import Settings
 from vep_link.exceptions import (
     AmbiguousMappingError,
     DataNotFoundError,
-    EnsemblApiError,
-    RateLimitedError,
     UnsupportedContigError,
     UpstreamInputError,
-    UpstreamTimeoutError,
-    VariantParseError,
     VepLinkError,
 )
 from vep_link.mcp._sanitize import sanitize_message
+from vep_link.mcp.errors import canonical_error_code
 from vep_link.models.enums import GenomeBuild, InputKind
 from vep_link.observability.telemetry import telemetry_cache
 from vep_link.services._recoding import (
@@ -59,29 +56,12 @@ from vep_link.variant import (
     parse_variant_input,
 )
 
-# Per-input batch error classification, most-specific subclass first
-# (UnsupportedContigError is a VariantParseError; both must precede it). Each row
-# is ``(exc_type, canonical_code, error_subcode | None)``: canonical_code is one
-# of the closed six (mirrors vep_link.mcp.errors.ERROR_CODES); the subcode is an
-# additive finer classification carried alongside it in the per-input row.
-_BATCH_ERROR_CODES: tuple[tuple[type[VepLinkError], str, str | None], ...] = (
-    (UnsupportedContigError, "invalid_input", "unsupported_input"),
-    (VariantParseError, "invalid_input", None),
-    (DataNotFoundError, "not_found", None),
-    (RateLimitedError, "rate_limited", None),
-    (UpstreamTimeoutError, "upstream_unavailable", "upstream_timeout"),
-    (EnsemblApiError, "upstream_unavailable", None),
-    (UpstreamInputError, "not_found", None),
-    (AmbiguousMappingError, "ambiguous_query", None),
-)
-
-
-def _batch_error_code(exc: VepLinkError) -> tuple[str, str | None]:
-    """Map a known vep-link exception to ``(canonical_code, subcode)``."""
-    for exc_type, code, subcode in _BATCH_ERROR_CODES:
-        if isinstance(exc, exc_type):
-            return code, subcode
-    return "internal", None
+# NB: batch per-input error classification is NOT duplicated here. It shares the
+# SINGLE canonical classifier (vep_link.mcp.errors.canonical_error_code) with the
+# MCP error boundary so batch and single-call paths map every exception type
+# identically (a duplicated table is a fix-narrower-than-class trap: an earlier
+# copy silently omitted DisallowedURLError / ResponseTooLargeError). See
+# canonical_error_code and the shared _EXCEPTION_MAP.
 
 
 def _allele_matches(canonical: str, allele: str) -> bool:
@@ -293,10 +273,11 @@ class VepService:
             try:
                 canonical, vep_line = await self._to_canonical(original, build)
             except VepLinkError as exc:
-                # Any known fault (parse, not-found, rate-limit, upstream) is
-                # collected per-input with its canonical code + subcode; never
+                # Any known fault (parse, not-found, rate-limit, upstream, URL-guard
+                # / response-cap refusal) is collected per-input with the SAME
+                # canonical code + subcode the single-call boundary uses; never
                 # abort the batch.
-                code, subcode = _batch_error_code(exc)
+                code, subcode = canonical_error_code(exc)
                 errors.append(self._batch_error(original, code, exc, subcode=subcode))
                 continue
             except Exception as exc:  # last-resort: one bad input cannot crash the batch
