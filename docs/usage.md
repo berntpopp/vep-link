@@ -204,8 +204,8 @@ Trim the payload with the optional `fields` filter:
 ## Workflow 4 — liftover GRCh37 ↔ GRCh38
 
 Map a genomic coordinate between the two human assemblies. Only
-`CHR-POS-REF-ALT` coordinates are liftable; HGVS/rsID are `unsupported_input`
-(resolve them first). The two assemblies must differ.
+`CHR-POS-REF-ALT` coordinates are liftable; HGVS/rsID are `invalid_input`
+(subcode `unsupported_input` — resolve them first). The two assemblies must differ.
 
 ```bash
 # GRCh37 -> GRCh38
@@ -245,8 +245,9 @@ limits:
   `VEP_LINK_INTER_CHUNK_DELAY_MS` (100 ms) politeness delay.
 
 If retries are exhausted, the tool returns a structured error envelope:
-`rate_limited` (429 after retries), `upstream_unavailable` (5xx / transport
-error), or `upstream_timeout`. These are retryable — back off and retry, or
+`rate_limited` (429 after retries) or `upstream_unavailable` (5xx / transport
+error / timeout; a timeout carries subcode `upstream_timeout`). These are
+retryable — back off and retry, or
 reduce parallelism. Treat live Ensembl rate limits as upstream state, not a local
 failure.
 

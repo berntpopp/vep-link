@@ -37,17 +37,23 @@ def new_request_id() -> str:
 
 
 def validate_vep_options(vep_options: dict[str, str] | None) -> None:
-    """Reject any caller-supplied VEP flag outside :data:`VEP_OPTION_ALLOWLIST`.
+    """Reject any caller-supplied VEP flag key outside :data:`VEP_OPTION_ALLOWLIST`.
 
-    Raises :class:`~vep_link.exceptions.UpstreamInputError` (which the error
-    module maps to ``invalid_input``) listing the disallowed keys so the client
-    can correct the request.
+    ``vep_options`` is advertised as a free ``dict[str, str]``, but the runtime
+    honours only the closed allowlist of KEYS -- an out-of-allowlist key would be
+    a schema-wider-than-runtime gap, so it is rejected here (never silently
+    dropped). Raises :class:`~vep_link.exceptions.UpstreamInputError` (which the
+    error module maps to ``invalid_input``) NAMING ``vep_options``, the offending
+    key(s), and the allowed set so the client can self-correct.
     """
     if not vep_options:
         return
     bad = set(vep_options) - VEP_OPTION_ALLOWLIST
     if bad:
-        raise UpstreamInputError(f"unsupported vep_options: {sorted(bad)}")
+        raise UpstreamInputError(
+            f"unknown 'vep_options' key(s) {sorted(bad)}; allowed keys are "
+            f"{sorted(VEP_OPTION_ALLOWLIST)} (see get_capabilities.vep_option_allowlist)"
+        )
 
 
 def spliceai_dbnsfp_note(vep_options: dict[str, str] | None) -> str | None:

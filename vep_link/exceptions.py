@@ -27,7 +27,7 @@ class VariantParseError(VepLinkError):
 class UnsupportedContigError(VariantParseError):
     """The variant's contig is outside the supported scope (e.g. MT liftover).
 
-    Maps to ``unsupported_input``.
+    Maps to canonical ``invalid_input`` (subcode ``unsupported_input``).
     """
 
 
@@ -43,7 +43,11 @@ class RateLimitedError(VepLinkError):
 
 
 class UpstreamTimeoutError(VepLinkError):
-    """An upstream request timed out. Maps to ``upstream_timeout`` (retryable)."""
+    """An upstream request timed out.
+
+    Maps to canonical ``upstream_unavailable`` (subcode ``upstream_timeout``);
+    retryable.
+    """
 
 
 class EnsemblApiError(VepLinkError):
@@ -55,7 +59,7 @@ class DataNotFoundError(VepLinkError):
 
 
 class AmbiguousMappingError(VepLinkError):
-    """A liftover produced more than one mapping. Maps to ``ambiguous``."""
+    """A liftover produced more than one mapping. Maps to ``ambiguous_query``."""
 
 
 class DisallowedURLError(VepLinkError):
@@ -75,5 +79,6 @@ class ResponseTooLargeError(VepLinkError):
 
     The capped read fails closed (raises) rather than truncating a partial body,
     so a corrupt/partial JSON is never parsed. Not an ``httpx`` fault, so it is
-    never retried by the base-client retry loop. Maps to ``output_validation_failed``.
+    never retried by the base-client retry loop. Maps to canonical ``internal``
+    (subcode ``output_validation_failed``).
     """

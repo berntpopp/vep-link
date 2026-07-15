@@ -21,7 +21,6 @@ from typing import Any
 from fastmcp import FastMCP
 
 from vep_link import __version__
-from vep_link.mcp.errors import install_validation_error_handler
 from vep_link.mcp.notfound_guard import (
     NotFoundGuard,
     install_protocol_error_handler,
@@ -29,6 +28,7 @@ from vep_link.mcp.notfound_guard import (
 )
 from vep_link.mcp.resources import RESEARCH_USE_NOTICE
 from vep_link.mcp.tools import register_vep_tools
+from vep_link.mcp.validation_errors import install_validation_error_handler
 
 _INSTRUCTIONS = (
     "vep-link annotates human genetic variants via the Ensembl Variant Effect "
@@ -85,6 +85,10 @@ def create_vep_mcp(
         version=__version__,
         instructions=_INSTRUCTIONS,
         mask_error_details=True,
+        # Tool-Surface Budget Standard v1: do NOT inline $defs/$ref at every use
+        # site (the default appends DereferenceRefsMiddleware, ~1.35x amplifier).
+        # Free + safe: 0 vep input schemas contain a $ref.
+        dereference_schemas=False,
     )
 
     # Guard the FastMCP-core not-found reflection surface: core echoes the

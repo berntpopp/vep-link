@@ -73,9 +73,11 @@ every `_meta` and skips re-fetching when unchanged.
   },
   "tools": [{"name": "get_capabilities", "summary": "...", "token_cost_hint": "low"}, "..."],
   "error_codes": [
-    "invalid_input", "unsupported_input", "not_found", "build_mismatch",
-    "ambiguous", "rate_limited", "upstream_unavailable", "upstream_timeout",
-    "output_validation_failed", "internal_error"
+    "invalid_input", "not_found", "ambiguous_query",
+    "upstream_unavailable", "rate_limited", "internal"
+  ],
+  "error_subcodes": [
+    "unsupported_input", "build_mismatch", "upstream_timeout", "output_validation_failed"
   ],
   "warning_codes": ["multiple_alts", "ref_not_validated"],
   "vep_default_options": {"CADD": "1", "REVEL": "1", "AlphaMissense": "1", "Conservation": "1", "hgvs": "1", "mane": "1", "numbers": "1", "canonical": "1", "domains": "1"},
@@ -151,8 +153,9 @@ single pick, and carries a `multiple_alts` warning. Single-alt inputs yield a
 }
 ```
 
-**Error codes.** `invalid_input`, `unsupported_input`, `not_found`,
-`rate_limited`, `upstream_unavailable`, `upstream_timeout`, `internal_error`.
+**Error codes.** `invalid_input`, `not_found`, `rate_limited`,
+`upstream_unavailable`, `internal` (with additive `error_subcode` where
+finer, e.g. `unsupported_input`, `upstream_timeout`).
 
 ---
 
@@ -197,8 +200,9 @@ arrays into flat, de-duplicated lists:
 }
 ```
 
-**Error codes.** `invalid_input`, `unsupported_input`, `not_found`,
-`rate_limited`, `upstream_unavailable`, `upstream_timeout`, `internal_error`.
+**Error codes.** `invalid_input`, `not_found`, `rate_limited`,
+`upstream_unavailable`, `internal` (with additive `error_subcode` where
+finer, e.g. `unsupported_input`, `upstream_timeout`).
 
 ---
 
@@ -414,10 +418,11 @@ not on the rows), and the raw `colocated_variants` array.
 }
 ```
 
-**Error codes.** `invalid_input` (bad input or disallowed `vep_options`),
-`unsupported_input`, `not_found`, `build_mismatch`, `rate_limited`,
-`upstream_unavailable`, `upstream_timeout`, `output_validation_failed`,
-`internal_error`.
+**Error codes.** `invalid_input` (bad input or disallowed `vep_options`; also
+covers unsupported contig and assembly/coordinate mismatch), `not_found`,
+`rate_limited`, `upstream_unavailable`, `internal`. Finer detail rides in the
+additive `error_subcode` (`unsupported_input`, `build_mismatch`,
+`upstream_timeout`, `output_validation_failed`).
 
 ---
 
@@ -468,8 +473,8 @@ batch-level failure (e.g. `>200` variants, upstream rate limit) returns the
 top-level error envelope instead.
 
 **Error codes (batch-level).** `invalid_input` (>200 variants or disallowed
-`vep_options`), `rate_limited`, `upstream_unavailable`, `upstream_timeout`,
-`internal_error`.
+`vep_options`), `rate_limited`, `upstream_unavailable`, `internal` (with
+additive `error_subcode` where finer, e.g. `upstream_timeout`).
 
 ---
 
@@ -529,11 +534,12 @@ On a REF mismatch the alleles are dropped and a warning is added:
 ```
 
 **Behavior.** Same `from_assembly`/`to_assembly` → `invalid_input`. HGVS/rsID →
-`unsupported_input`. Zero mappings → `not_found`. More than one mapping →
-`ambiguous`.
+`invalid_input` (subcode `unsupported_input`). Zero mappings → `not_found`. More
+than one mapping → `ambiguous_query`.
 
-**Error codes.** `invalid_input`, `unsupported_input`, `not_found`, `ambiguous`,
-`rate_limited`, `upstream_unavailable`, `upstream_timeout`, `internal_error`.
+**Error codes.** `invalid_input`, `not_found`, `ambiguous_query`,
+`rate_limited`, `upstream_unavailable`, `internal` (finer detail in the additive
+`error_subcode`, e.g. `unsupported_input`, `upstream_timeout`).
 
 ---
 

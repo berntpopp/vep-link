@@ -137,6 +137,19 @@ class UpstreamHealth:
             return False
         return True
 
+    def _accepting(self, st: _HostState) -> bool:
+        """Whether ``allow`` WOULD currently permit a call — without mutating state.
+
+        Honesty for the snapshot: an ``open`` breaker whose cooldown has elapsed
+        still lets the next call through (it transitions to ``half_open`` on
+        ``allow``). Reporting ``circuit: open`` while calls pass is the audit's
+        "open-but-passing" confusion; surfacing ``accepting`` alongside the raw
+        circuit state makes the two facts consistent for a reader.
+        """
+        if st.state == "open":
+            return self.clock() - st.opened_at >= self.settings.CIRCUIT_COOLDOWN_SECONDS
+        return True
+
     # -- active probe ------------------------------------------------------
 
     async def probe(self, assembly: str | GenomeBuild) -> bool:
@@ -194,6 +207,9 @@ class UpstreamHealth:
         return {
             "status": self._status(st),
             "circuit": st.state,
+            # Honest companion to ``circuit``: whether the breaker would let the
+            # next call through right now (an open-but-cooled-down breaker does).
+            "accepting": self._accepting(st),
             "reachable": st.reachable,
             "checked_at": st.checked_at,
             "latency_ms": st.latency_ms,
@@ -215,7 +231,17 @@ class UpstreamHealth:
             healthy = [n for n, s in statuses.items() if s == "ok"]
             advice = f"Ensembl {', '.join(degraded)} is degraded."
             if healthy:
-                advice += f" The {', '.join(healthy)} host is currently healthy — retry there if a result on that build is acceptable."
+                # Endpoint-honest: health is tracked PER HOST via /info/ping, not
+                # per endpoint. A host answering ping does NOT prove the specific
+                # failed endpoint (e.g. variant_recoder) works there — a single-
+                # endpoint outage can hit both builds equally, so "retry the other
+                # build" must not be stated as a guaranteed fix (audit misdirection).
+                advice += (
+                    f" The {', '.join(healthy)} host answered a health ping (/info/ping),"
+                    " but that does not confirm the specific failed endpoint works there;"
+                    " retry that build only if a result on it is acceptable, and treat a"
+                    " repeat failure as an endpoint-wide (not host-specific) outage."
+                )
             else:
                 advice += " Retry shortly with backoff."
             hint["advice"] = advice

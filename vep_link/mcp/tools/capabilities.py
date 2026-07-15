@@ -15,6 +15,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
+from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
 from vep_link.mcp.resources import build_meta, server_capabilities
 from vep_link.mcp.tools._common import new_request_id
 
@@ -32,15 +33,27 @@ def register_capabilities_tools(
         title="Get Server Capabilities",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"discovery"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def get_capabilities() -> dict[str, Any]:
-        """Read this first in a cold session. Returns server/tool metadata: supported assemblies (GRCh38 default, GRCh37), input formats (coordinate, rsID, HGVS, SPDI, CNV), the VEP-option allowlist, the four response_mode tiers, the deterministic error codes, the citation contract, a capabilities_version hash a warm client can compare to skip re-fetching, and a live `upstream` health summary (per-assembly Ensembl REST status from the circuit breaker). No upstream call; never fails."""
-        doc: dict[str, Any] = {
-            **server_capabilities(),
-            "_meta": build_meta(tool="get_capabilities", request_id=new_request_id()),
-        }
-        # Live per-assembly upstream health, kept OUTSIDE the hashed capabilities
-        # document so the capabilities_version stays stable across status changes.
-        if health_factory is not None:
-            doc["upstream"] = health_factory().snapshot()
-        return doc
+        """Read this first in a cold session. Returns server/tool metadata: supported assemblies (GRCh38 default, GRCh37), input formats (coordinate, rsID, HGVS, SPDI, CNV), the VEP-option allowlist, the four response_mode tiers, the deterministic error codes, the citation contract, a capabilities_version hash a warm client can compare to skip re-fetching, and a live `upstream` health summary (per-assembly Ensembl REST status from the circuit breaker). No upstream call."""
+
+        async def call() -> dict[str, Any]:
+            doc: dict[str, Any] = {
+                **server_capabilities(),
+                "_meta": build_meta(tool="get_capabilities", request_id=new_request_id()),
+            }
+            # Live per-assembly upstream health, kept OUTSIDE the hashed capabilities
+            # document so the capabilities_version stays stable across status changes.
+            if health_factory is not None:
+                doc["upstream"] = health_factory().snapshot()
+            return doc
+
+        # Runs INSIDE the error boundary so a genuine internal fault (e.g. a
+        # health snapshot failure) maps to `internal` with a correlation id --
+        # NOT to the FastMCP-core not-found return path, which the protocol
+        # backstop would otherwise mislabel as `not_found` (an existing tool must
+        # never report itself as "not available").
+        return await run_mcp_tool(
+            "get_capabilities", call, McpErrorContext(tool_name="get_capabilities")
+        )

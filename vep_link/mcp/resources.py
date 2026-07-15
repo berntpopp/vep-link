@@ -100,17 +100,25 @@ _TOOLS: list[dict[str, str]] = [
     },
 ]
 
+# The CLOSED six-value GeneFoundry Response-Envelope error_code enum a client
+# branches on. Kept in sync with vep_link.mcp.errors.ERROR_CODES.
 _ERROR_CODES = [
     "invalid_input",
-    "unsupported_input",
     "not_found",
-    "build_mismatch",
-    "ambiguous",
-    "rate_limited",
+    "ambiguous_query",
     "upstream_unavailable",
+    "rate_limited",
+    "internal",
+]
+
+# Additive, non-normative finer classifications a response MAY carry in
+# ``error_subcode`` (never in ``error_code``). Kept in sync with
+# vep_link.mcp.errors.ERROR_SUBCODES.
+_ERROR_SUBCODES = [
+    "unsupported_input",
+    "build_mismatch",
     "upstream_timeout",
     "output_validation_failed",
-    "internal_error",
 ]
 
 _INPUT_FORMATS = [
@@ -229,6 +237,7 @@ def server_capabilities() -> dict[str, Any]:
         },
         "tools": [dict(tool) for tool in _TOOLS],
         "error_codes": list(_ERROR_CODES),
+        "error_subcodes": list(_ERROR_SUBCODES),
         "warning_codes": list(_WARNING_CODES),
         "vep_default_options": dict(DEFAULT_VEP_OPTIONS),
         "vep_option_allowlist": sorted(VEP_OPTION_ALLOWLIST),
