@@ -418,3 +418,75 @@ async def test_each_tool_is_invocable_with_minimal_args(facade) -> None:
         data = structured(await facade.call_tool(name, args))
         assert isinstance(data, dict)
         assert data
+
+
+# ---------------------------------------------------------------------------
+# Contract hardening: actionable validation errors + tool-surface budget
+# ---------------------------------------------------------------------------
+
+
+async def test_unknown_argument_error_names_the_offending_parameter(facade) -> None:
+    """An invalid-arguments call must NAME the parameter (Response-Envelope §2).
+
+    The behaviour gate's "names the offending or the valid parameters" check: a
+    model can only self-correct if the envelope carries a concrete parameter.
+    Regression for get_capabilities / recode_variant / check_upstream_health,
+    which previously returned only "N error(s)" with nothing to act on.
+    """
+    from fastmcp.tools import ToolResult
+
+    for name in ("get_capabilities", "recode_variant", "check_upstream_health"):
+        result = await facade.call_tool(name, {"__nope__": "x"})
+        assert isinstance(result, ToolResult)
+        assert result.is_error is True  # MCP-native isError on the wire
+        env = structured(result)
+        assert env["success"] is False
+        assert env["error_code"] == "invalid_input"  # never not_found
+        # The offending arg is named in the message AND carried structurally.
+        assert "__nope__" in env["message"]
+        assert env["field"] and "__nope__" in env["field"]
+
+
+async def test_no_tool_publishes_an_output_schema(facade) -> None:
+    """Tool-Surface Budget v1: outputSchema is suppressed on every tool."""
+    from fastmcp import Client
+
+    async with Client(facade) as client:
+        tools = await client.list_tools()
+    assert tools, "expected a non-empty tool list"
+    with_output = [t.name for t in tools if getattr(t, "outputSchema", None)]
+    assert with_output == [], f"tools still publish outputSchema: {with_output}"
+
+
+async def test_total_tool_surface_stays_under_budget(facade) -> None:
+    """Regression guard: the server's own tool surface stays well under 10k tokens.
+
+    Uses a serialized-char proxy (~4 chars/token). No tool definition may be
+    oversized and the whole surface must stay comfortably under the 10,000-token
+    ceiling even as descriptions grow.
+    """
+    import json
+
+    from fastmcp import Client
+
+    async with Client(facade) as client:
+        tools = await client.list_tools()
+    per_tool = {
+        t.name: len(
+            json.dumps(
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "inputSchema": t.inputSchema,
+                    "outputSchema": getattr(t, "outputSchema", None),
+                },
+                default=str,
+            )
+        )
+        for t in tools
+    }
+    total_chars = sum(per_tool.values())
+    # ~4 chars/token: 40,000 chars ~ 10,000 tokens (B2); 4,800 chars ~ 1,200 (B1).
+    assert total_chars < 40_000, f"surface too large: {total_chars} chars ({per_tool})"
+    oversized = {n: c for n, c in per_tool.items() if c >= 4_800}
+    assert not oversized, f"tool(s) over ~1,200-token budget: {oversized}"

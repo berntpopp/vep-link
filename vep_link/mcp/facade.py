@@ -85,6 +85,10 @@ def create_vep_mcp(
         version=__version__,
         instructions=_INSTRUCTIONS,
         mask_error_details=True,
+        # Tool-Surface Budget Standard v1: do NOT inline $defs/$ref at every use
+        # site (the default appends DereferenceRefsMiddleware, ~1.35x amplifier).
+        # Free + safe: 0 vep input schemas contain a $ref.
+        dereference_schemas=False,
     )
 
     # Guard the FastMCP-core not-found reflection surface: core echoes the

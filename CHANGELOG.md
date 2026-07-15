@@ -6,6 +6,64 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-15
+
+GeneFoundry MCP contract-hardening sweep — brings vep-link into compliance with the
+fleet Response-Envelope, Tool-Schema Documentation, and Tool-Surface Budget standards
+(genefoundry-router #73 / #75 / #76). The behaviour conformance gate
+(`tests/conformance/behaviour.py`, vendored byte-identical from router `791363c`) is now
+CONFORMANT (0 fail, 0 UNGATED) and wired into `.github/workflows/conformance.yml`.
+Research use only.
+
+### Changed
+
+- **`error_code` is now closed to the six-value GeneFoundry canon** —
+  `invalid_input · not_found · ambiguous_query · upstream_unavailable · rate_limited ·
+  internal`. The previous ten-value taxonomy is mapped onto it: `unsupported_input` and
+  `build_mismatch` → `invalid_input`; `ambiguous` → `ambiguous_query`; `upstream_timeout`
+  → `upstream_unavailable`; `output_validation_failed` → `internal`; `internal_error` →
+  `internal`. **Wire note (potentially breaking for a client that branched on the old
+  codes):** the finer classification is preserved additively in a new `error_subcode`
+  field (e.g. an `upstream_unavailable` timeout carries `error_subcode: "upstream_timeout"`),
+  and `get_capabilities` now advertises both `error_codes` (the closed six) and
+  `error_subcodes`. Batch per-input error rows use the same canon + subcode.
+- **Invalid-argument errors now name the offending parameter.** A bad-arguments call
+  previously returned only `"Invalid arguments for <tool>: N error(s)."` with nothing for
+  a model to act on; `get_capabilities`, `recode_variant` and `check_upstream_health`
+  failed the behaviour gate's "names the offending or the valid parameters" check. The
+  handler now extracts the offending field(s) from the validation error, names them in the
+  `message`, and carries them as a structured `field` plus the tool's `allowed_values`
+  (accepted parameter names).
+- **Upstream health advice is endpoint-honest.** Health is tracked per HOST via
+  `/info/ping`, not per endpoint, so a working `/vep` could mask a dead `/variant_recoder`
+  and advise "retry the other build" as a guaranteed fix. The fallback advice now states
+  the ping is a host-level signal that does not confirm the failed endpoint works on the
+  other build, and to treat a repeat failure as endpoint-wide. A timeout's recovery notes
+  that a healthy VEP call can legitimately take ~40s (so a slow call is not misread as an
+  outage).
+
+### Added
+
+- **`error_subcode`** (additive) on error envelopes and batch rows; **`accepting`** on
+  each per-host health view — an honest companion to `circuit`, true when an `open`
+  breaker's cooldown has elapsed and the next call would pass (closes the audit's
+  "breaker reported open while still letting calls through" confusion). Computed without
+  mutating breaker state.
+- Behaviour conformance gate vendored and wired into CI (`Run behaviour probe`).
+
+### Removed
+
+- **`outputSchema` is no longer published on any tool** (`output_schema=None`) and the
+  server is constructed with `FastMCP(dereference_schemas=False)` — Tool-Surface Budget
+  Standard v1. `structuredContent` is unaffected (every tool returns a dict envelope).
+  Total advertised tool surface drops to ~2,585 tokens (0% `outputSchema`).
+
+### Fixed
+
+- `liftover_variant` was un-probeable by the behaviour gate (UNGATED): its required
+  `from_assembly` / `to_assembly` enum parameters carried no `examples`. Examples added
+  (Tool-Schema Documentation Standard S2), so the tool is now fully gated.
+
 ## [1.0.9] - 2026-07-14
 
 ### Changed

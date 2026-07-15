@@ -39,15 +39,18 @@ EXPECTED_TOOLS = [
 
 EXPECTED_ERROR_CODES = [
     "invalid_input",
-    "unsupported_input",
     "not_found",
-    "build_mismatch",
-    "ambiguous",
-    "rate_limited",
+    "ambiguous_query",
     "upstream_unavailable",
+    "rate_limited",
+    "internal",
+]
+
+EXPECTED_ERROR_SUBCODES = [
+    "unsupported_input",
+    "build_mismatch",
     "upstream_timeout",
     "output_validation_failed",
-    "internal_error",
 ]
 
 
@@ -230,6 +233,7 @@ def test_server_capabilities_six_tools_by_name() -> None:
 def test_server_capabilities_error_codes() -> None:
     caps = server_capabilities()
     assert caps["error_codes"] == EXPECTED_ERROR_CODES
+    assert caps["error_subcodes"] == EXPECTED_ERROR_SUBCODES
 
 
 def test_server_capabilities_vep_options() -> None:

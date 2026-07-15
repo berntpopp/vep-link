@@ -60,25 +60,28 @@ from vep_link.variant import (
 )
 
 # Per-input batch error classification, most-specific subclass first
-# (UnsupportedContigError is a VariantParseError; both must precede it).
-_BATCH_ERROR_CODES: tuple[tuple[type[VepLinkError], str], ...] = (
-    (UnsupportedContigError, "unsupported_input"),
-    (VariantParseError, "invalid_input"),
-    (DataNotFoundError, "not_found"),
-    (RateLimitedError, "rate_limited"),
-    (UpstreamTimeoutError, "upstream_timeout"),
-    (EnsemblApiError, "upstream_unavailable"),
-    (UpstreamInputError, "not_found"),
-    (AmbiguousMappingError, "ambiguous"),
+# (UnsupportedContigError is a VariantParseError; both must precede it). Each row
+# is ``(exc_type, canonical_code, error_subcode | None)``: canonical_code is one
+# of the closed six (mirrors vep_link.mcp.errors.ERROR_CODES); the subcode is an
+# additive finer classification carried alongside it in the per-input row.
+_BATCH_ERROR_CODES: tuple[tuple[type[VepLinkError], str, str | None], ...] = (
+    (UnsupportedContigError, "invalid_input", "unsupported_input"),
+    (VariantParseError, "invalid_input", None),
+    (DataNotFoundError, "not_found", None),
+    (RateLimitedError, "rate_limited", None),
+    (UpstreamTimeoutError, "upstream_unavailable", "upstream_timeout"),
+    (EnsemblApiError, "upstream_unavailable", None),
+    (UpstreamInputError, "not_found", None),
+    (AmbiguousMappingError, "ambiguous_query", None),
 )
 
 
-def _batch_error_code(exc: VepLinkError) -> str:
-    """Map a known vep-link exception to its batch per-input error code."""
-    for exc_type, code in _BATCH_ERROR_CODES:
+def _batch_error_code(exc: VepLinkError) -> tuple[str, str | None]:
+    """Map a known vep-link exception to ``(canonical_code, subcode)``."""
+    for exc_type, code, subcode in _BATCH_ERROR_CODES:
         if isinstance(exc, exc_type):
-            return code
-    return "internal_error"
+            return code, subcode
+    return "internal", None
 
 
 def _allele_matches(canonical: str, allele: str) -> bool:
@@ -291,11 +294,13 @@ class VepService:
                 canonical, vep_line = await self._to_canonical(original, build)
             except VepLinkError as exc:
                 # Any known fault (parse, not-found, rate-limit, upstream) is
-                # collected per-input with its mapped code; never abort the batch.
-                errors.append(self._batch_error(original, _batch_error_code(exc), exc))
+                # collected per-input with its canonical code + subcode; never
+                # abort the batch.
+                code, subcode = _batch_error_code(exc)
+                errors.append(self._batch_error(original, code, exc, subcode=subcode))
                 continue
             except Exception as exc:  # last-resort: one bad input cannot crash the batch
-                errors.append(self._batch_error(original, "internal_error", exc))
+                errors.append(self._batch_error(original, "internal", exc))
                 continue
             canonical_to_inputs.setdefault(canonical, []).append(original)
             canonical_to_line[canonical] = vep_line
@@ -352,23 +357,29 @@ class VepService:
         return results
 
     @staticmethod
-    def _batch_error(original: str, code: str, exc: Exception) -> dict:
+    def _batch_error(
+        original: str, code: str, exc: Exception, *, subcode: str | None = None
+    ) -> dict:
         """Shape a per-input batch failure record.
 
         This row rides inside an otherwise-successful batch response, so it
         bypasses the MCP error boundary (:func:`run_mcp_tool`) and its sanitation
         -- the per-item ``message`` is therefore made safe here directly. An
-        ``internal_error`` NEVER echoes ``str(exc)`` (it can carry internal detail
+        ``internal`` error NEVER echoes ``str(exc)`` (it can carry internal detail
         / filesystem paths), matching the boundary's opaque-internal contract; a
         classified fault's server-authored message is stripped of the fence's
-        forbidden control / zero-width / bidi / NUL code points.
+        forbidden control / zero-width / bidi / NUL code points. ``error_code`` is
+        one of the closed six; a finer ``error_subcode`` rides additively.
         """
         message = (
             "Internal error while processing this input."
-            if code == "internal_error"
+            if code == "internal"
             else sanitize_message(str(exc) or type(exc).__name__)
         )
-        return {"input": original, "error_code": code, "message": message}
+        row: dict = {"input": original, "error_code": code, "message": message}
+        if subcode:
+            row["error_subcode"] = subcode
+        return row
 
     # -- recode ------------------------------------------------------------
 

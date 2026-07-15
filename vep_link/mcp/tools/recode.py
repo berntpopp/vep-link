@@ -34,6 +34,7 @@ def register_recode_tools(
         title="Recode Variant Representations",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"recode"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def recode_variant(
         variants: Annotated[

@@ -21,14 +21,21 @@ this backend's sole MCP error boundary, :func:`run_mcp_tool`:
 The error-code -> recovery mapping is centralized here (mirroring the
 ``vep_link.exceptions`` docstrings):
 
-* Known :class:`~vep_link.exceptions.VepLinkError` subclasses map to a stable
-  ``error_code`` + a recovery hint. Subclass specificity matters --
+* Known :class:`~vep_link.exceptions.VepLinkError` subclasses map to a
+  **canonical** ``error_code`` drawn from the closed six-value GeneFoundry
+  Response-Envelope enum (``invalid_input``, ``not_found``, ``ambiguous_query``,
+  ``upstream_unavailable``, ``rate_limited``, ``internal``) plus a recovery hint.
+  Where a finer distinction is useful to an operator, it rides in an ADDITIVE
+  ``error_subcode`` field (e.g. an ``upstream_unavailable`` timeout carries
+  ``error_subcode: "upstream_timeout"``); a client branches on the six-value
+  ``error_code``, telemetry keeps the granularity. Subclass specificity matters --
   :class:`~vep_link.exceptions.UnsupportedContigError` subclasses
   :class:`~vep_link.exceptions.VariantParseError`, so it is checked FIRST and
-  classifies as ``unsupported_input`` rather than ``invalid_input``.
+  classifies with subcode ``unsupported_input`` (canonical ``invalid_input``)
+  and its own recovery, rather than the plain-parse-error recovery.
 * Anything else (an unmapped ``VepLinkError`` or a stray ``RuntimeError``) becomes
-  a sanitized ``internal_error``: the original text is never surfaced to the
-  client. Instead a fresh ``correlation_id`` is generated, embedded in the
+  a sanitized canonical ``internal`` error: the original text is never surfaced to
+  the client. Instead a fresh ``correlation_id`` is generated, embedded in the
   client-facing message, and logged alongside the real exception so an operator
   can join the two from logs.
 
@@ -81,19 +88,27 @@ from vep_link.observability.telemetry import (
 
 logger = structlog.get_logger("vep_link.mcp.errors")
 
-# The ten deterministic error codes, in spec (§7) order. Surfaced verbatim in the
-# capabilities document so a client can branch on them ahead of time.
+# The CLOSED six-value GeneFoundry Response-Envelope error_code enum. A client
+# branches ONLY on these; the capabilities document surfaces exactly this set.
 ERROR_CODES: tuple[str, ...] = (
     "invalid_input",
-    "unsupported_input",
     "not_found",
-    "build_mismatch",
-    "ambiguous",
-    "rate_limited",
+    "ambiguous_query",
     "upstream_unavailable",
+    "rate_limited",
+    "internal",
+)
+
+# Finer-grained, non-normative classifications carried ADDITIVELY in
+# ``error_subcode`` (never in ``error_code``). Preserved so operators/telemetry
+# keep the distinction the six-value canon collapses (e.g. a timeout vs a 5xx,
+# both canonical ``upstream_unavailable``). Documented in capabilities as
+# ``error_subcodes`` so a client MAY use them but is never required to.
+ERROR_SUBCODES: tuple[str, ...] = (
+    "unsupported_input",
+    "build_mismatch",
     "upstream_timeout",
     "output_validation_failed",
-    "internal_error",
 )
 
 # Always-on safe entry point a confused client can fall back to.
@@ -102,9 +117,7 @@ _FALLBACK_TOOL = "get_capabilities"
 # Error codes that represent a transient upstream fault: the client should back
 # off and retry (or switch assembly), not reformulate its input. These also feed
 # the circuit breaker's failure count.
-_RETRYABLE_CODES: frozenset[str] = frozenset(
-    {"rate_limited", "upstream_unavailable", "upstream_timeout"}
-)
+_RETRYABLE_CODES: frozenset[str] = frozenset({"rate_limited", "upstream_unavailable"})
 # Default backoff hint surfaced as the top-level ``retry_after_s`` for retryable faults.
 _DEFAULT_RETRY_AFTER_S = 10
 
@@ -113,9 +126,7 @@ _DEFAULT_RETRY_AFTER_S = 10
 # ``recovery_action``'s "reformulate_input" bucket alongside the retryable set's
 # "retry_backoff" bucket; every other code defaults to "switch_tool" (typically
 # ``get_capabilities`` or a resolver named in ``recovery``).
-_REFORMULATE_CODES: frozenset[str] = frozenset(
-    {"invalid_input", "unsupported_input", "build_mismatch", "ambiguous"}
-)
+_REFORMULATE_CODES: frozenset[str] = frozenset({"invalid_input", "ambiguous_query"})
 
 # Recovery text for the internal_error fallthrough; every mapped exception resolves
 # its own recovery from ``_EXCEPTION_MAP`` below.
@@ -124,21 +135,27 @@ _INTERNAL_ERROR_RECOVERY = (
 )
 
 # Ordered MOST-SPECIFIC FIRST. UnsupportedContigError subclasses VariantParseError,
-# so it must precede VariantParseError or it would be mis-classified as invalid_input.
-_EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str], ...] = (
+# so it must precede VariantParseError or it would be mis-classified. Each row is
+# ``(exc_type, canonical_code, error_subcode | None, recovery)``: the canonical
+# code is one of the closed six (ERROR_CODES); the subcode (when present) is an
+# ADDITIVE finer classification carried in ``error_subcode``.
+_EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str | None, str], ...] = (
     (
         UnsupportedContigError,
+        "invalid_input",
         "unsupported_input",
         "This input/contig is not supported for the requested operation.",
     ),
     (
         VariantParseError,
         "invalid_input",
+        None,
         "Check the variant format: coordinate (CHR-POS-REF-ALT), rsID, HGVS, or SPDI.",
     ),
     (
         UpstreamInputError,
         "invalid_input",
+        None,
         # UpstreamInputError covers both Ensembl 4xx rejections AND local
         # validation (same-assembly liftover, bad vep_options, oversized batch),
         # so the recovery must stay source-neutral -- never claim Ensembl rejected
@@ -148,40 +165,51 @@ _EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str], ...] = (
     (
         DataNotFoundError,
         "not_found",
+        None,
         "No data found; try resolve_variant first to validate the input.",
     ),
     (
         AmbiguousMappingError,
-        "ambiguous",
+        "ambiguous_query",
+        None,
         "The liftover is ambiguous (multiple mappings); inspect the region manually.",
     ),
     (
         RateLimitedError,
         "rate_limited",
+        None,
         "Upstream rate limit hit; retry with exponential backoff or fewer parallel calls.",
     ),
     (
         UpstreamTimeoutError,
+        "upstream_unavailable",
         "upstream_timeout",
-        "Upstream timed out; retry shortly.",
+        # A timeout is a transient upstream fault, canonically upstream_unavailable.
+        # NB: a healthy VEP call can legitimately take ~44s; a timeout here means the
+        # request exceeded the server's own deadline, not merely that it was slow.
+        "Upstream timed out; retry shortly (VEP calls can legitimately take ~40s).",
     ),
     (
         EnsemblApiError,
         "upstream_unavailable",
+        None,
         "Ensembl REST is temporarily unavailable; retry shortly.",
     ),
     # Outbound URL-guard / response-cap refusals (F-17). Deterministic and
     # NON-RETRYABLE: a redirect to a non-allowlisted destination, or a response
-    # over the decoded-byte cap, will not change on retry. Classified as
-    # output_validation_failed (the upstream response could not be accepted); the
-    # exceptions carry FIXED, body-free messages so nothing upstream is reflected.
+    # over the decoded-byte cap, will not change on retry. Canonically ``internal``
+    # (a server-side refusal to accept the upstream response), with an additive
+    # ``output_validation_failed`` subcode; the exceptions carry FIXED, body-free
+    # messages so nothing upstream is reflected.
     (
         DisallowedURLError,
+        "internal",
         "output_validation_failed",
         "The upstream redirected to a destination the server does not permit; do not retry.",
     ),
     (
         ResponseTooLargeError,
+        "internal",
         "output_validation_failed",
         "The upstream response exceeded the server size limit; narrow the query (fewer variants).",
     ),
@@ -206,16 +234,17 @@ class McpErrorContext:
     health: UpstreamHealth | None = None
 
 
-def _classify(exc: BaseException) -> tuple[str, str] | None:
-    """Return ``(code, recovery)`` for a known exception, else ``None``.
+def _classify(exc: BaseException) -> tuple[str, str | None, str] | None:
+    """Return ``(canonical_code, subcode, recovery)`` for a known exception, else ``None``.
 
     Walks ``_EXCEPTION_MAP`` most-specific-first; the first ``isinstance`` match
     wins, so subclass relationships (UnsupportedContigError < VariantParseError)
-    are honored.
+    are honored. ``canonical_code`` is always one of the closed six
+    (:data:`ERROR_CODES`); ``subcode`` is an optional finer classification.
     """
-    for exc_type, code, recovery in _EXCEPTION_MAP:
+    for exc_type, code, subcode, recovery in _EXCEPTION_MAP:
         if isinstance(exc, exc_type):
-            return code, recovery
+            return code, subcode, recovery
     return None
 
 
@@ -243,6 +272,7 @@ def mcp_tool_error(
     ctx: McpErrorContext,
     request_id: str | None = None,
     retry_after_s: int | None = None,
+    subcode: str | None = None,
 ) -> dict[str, Any]:
     """Build the FLAT Response-Envelope Standard v1 error frame.
 
@@ -264,6 +294,9 @@ def mcp_tool_error(
     envelope: dict[str, Any] = {
         "success": False,
         "error_code": code,
+        # Additive finer classification (never one of the six canonical codes a
+        # client branches on); present only when it adds detail beyond error_code.
+        **({"error_subcode": subcode} if subcode else {}),
         # Single choke point for EVERY error path (classified str(exc), the
         # arg-validation frame, and the internal_error fallback all route through
         # here): strip the fence's forbidden control/zero-width/bidi/NUL code
@@ -347,7 +380,7 @@ def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[s
     )
     message = f"Internal error in {ctx.tool_name} (correlation_id={correlation_id}). Retry later."
     return mcp_tool_error(
-        code="internal_error",
+        code="internal",
         message=message,
         recovery=_INTERNAL_ERROR_RECOVERY,
         ctx=ctx,
@@ -382,9 +415,11 @@ async def run_mcp_tool(
         classified = _classify(exc)
         if classified is None:
             return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
-        code, recovery = classified
-        # A real upstream fault: feed the breaker and append the healthy-host
-        # advice (e.g. "GRCh37 is healthy -- retry there") to the recovery.
+        code, subcode, recovery = classified
+        # A real upstream fault: feed the breaker and append the fallback-host
+        # advice to the recovery. The advice is deliberately endpoint-honest --
+        # per-host /info/ping health does NOT prove the specific failed endpoint
+        # (e.g. variant_recoder) works on the other build (see meta_hint()).
         if code in _RETRYABLE_CODES and ctx.health is not None:
             if ctx.assembly:
                 ctx.health.record_failure(ctx.assembly, exc)
@@ -392,7 +427,9 @@ async def run_mcp_tool(
             if advice:
                 recovery = f"{recovery} {advice}"
         message = str(exc) or type(exc).__name__
-        envelope = mcp_tool_error(code=code, message=message, recovery=recovery, ctx=ctx)
+        envelope = mcp_tool_error(
+            code=code, message=message, recovery=recovery, ctx=ctx, subcode=subcode
+        )
         return _finalize_error(envelope, ctx, start)
     except Exception as exc:  # error-boundary contract: every other fault -> internal_error
         return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
@@ -434,7 +471,7 @@ def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float
     against the installed ``fastmcp==3.4.4``.
     """
     elapsed_ms = _stamp_elapsed(envelope, start)
-    code = str(envelope.get("error_code", "internal_error"))
+    code = str(envelope.get("error_code", "internal"))
     METRICS.record_tool_call(ctx.tool_name, outcome="error", code=code, elapsed_ms=elapsed_ms)
     return ToolResult(structured_content=envelope, is_error=True)
 
@@ -459,6 +496,44 @@ def install_validation_error_handler(mcp: Any) -> None:
     except Exception:  # best-effort; pydantic is always present in prod.
         return
 
+    def _offending_fields(exc: BaseException) -> list[str]:
+        """Names of the offending argument(s), walking to the pydantic error.
+
+        For a missing required argument the loc is the required field name; for an
+        unknown/extra argument (``extra='forbid'``) it is the rejected key. Either
+        way the model gets a concrete parameter to act on. FastMCP re-raises the
+        pydantic error as its own ``ValidationError`` with the original in
+        ``__cause__``, so the chain is walked.
+        """
+        seen: set[int] = set()
+        err: BaseException | None = exc
+        while err is not None and id(err) not in seen:
+            seen.add(id(err))
+            errors_fn = getattr(err, "errors", None)
+            if callable(errors_fn):
+                try:
+                    raw = errors_fn()
+                except Exception:
+                    raw = None
+                names: list[str] = []
+                for item in raw or []:
+                    loc = item.get("loc") if isinstance(item, dict) else None
+                    if loc:
+                        names.append(str(loc[-1]))
+                if names:
+                    return list(dict.fromkeys(names))  # dedupe, preserve order
+            err = getattr(err, "__cause__", None)
+        return []
+
+    def _declared_params(tool: Any) -> list[str]:
+        """Declared input-parameter names for ``tool`` (the valid arguments)."""
+        schema = getattr(tool, "parameters", None)
+        if isinstance(schema, dict):
+            props = schema.get("properties")
+            if isinstance(props, dict):
+                return sorted(props.keys())
+        return []
+
     components: dict[Any, Any] = {}
     local_provider = getattr(mcp, "_local_provider", None)
     provider_components = getattr(local_provider, "_components", None)
@@ -475,27 +550,46 @@ def install_validation_error_handler(mcp: Any) -> None:
             continue
         original_run = tool.run
         tool_label = str(getattr(tool, "name", "unknown"))
+        tool_params = _declared_params(tool)
 
         async def wrapped_run(
             arguments: dict[str, Any],
             *,
             _original_run: Callable[[dict[str, Any]], Awaitable[Any]] = original_run,
             _tool_name: str = tool_label,
+            _allowed: list[str] = tool_params,
         ) -> Any:
             try:
                 return await _original_run(arguments)
             except (PydanticValidationError, FastMCPValidationError) as exc:
                 ctx = McpErrorContext(tool_name=_tool_name)
-                error_count = exc.error_count() if isinstance(exc, PydanticValidationError) else 1
+                fields = _offending_fields(exc)
+                # Name the offending parameter(s) IN the message AND carry them as a
+                # structured `field` (plus the valid `allowed_values`) so a model can
+                # self-correct instead of guessing (Response-Envelope §2; the
+                # behaviour gate's "names the offending or the valid parameters").
+                if fields:
+                    named = ", ".join(fields)
+                    message = f"Invalid arguments for {_tool_name}: check parameter(s): {named}."
+                else:
+                    error_count = (
+                        exc.error_count() if isinstance(exc, PydanticValidationError) else 1
+                    )
+                    message = f"Invalid arguments for {_tool_name}: {error_count} error(s)."
+                recovery = "Fix the tool arguments to match the schema"
+                if _allowed:
+                    recovery += f"; accepted parameters: {', '.join(_allowed)}"
+                recovery += "; call get_capabilities for the full contract."
                 envelope = mcp_tool_error(
                     code="invalid_input",
-                    message=f"Invalid arguments for {_tool_name}: {error_count} error(s).",
-                    recovery=(
-                        "Fix the tool arguments to match the schema; "
-                        "call get_capabilities for accepted parameters."
-                    ),
+                    message=message,
+                    recovery=recovery,
                     ctx=ctx,
                 )
+                if fields:
+                    envelope["field"] = fields
+                if _allowed:
+                    envelope["allowed_values"] = _allowed
                 return ToolResult(structured_content=envelope, is_error=True)
 
         try:

@@ -32,6 +32,7 @@ def register_capabilities_tools(
         title="Get Server Capabilities",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"discovery"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def get_capabilities() -> dict[str, Any]:
         """Read this first in a cold session. Returns server/tool metadata: supported assemblies (GRCh38 default, GRCh37), input formats (coordinate, rsID, HGVS, SPDI, CNV), the VEP-option allowlist, the four response_mode tiers, the deterministic error codes, the citation contract, a capabilities_version hash a warm client can compare to skip re-fetching, and a live `upstream` health summary (per-assembly Ensembl REST status from the circuit breaker). No upstream call; never fails."""

@@ -106,6 +106,7 @@ def register_annotate_tools(
         title="Annotate Variant (VEP)",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"annotate"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def annotate_variant(
         variant: Annotated[
@@ -226,6 +227,7 @@ def register_annotate_tools(
         title="Annotate Variants Batch (VEP)",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"annotate", "batch"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def annotate_variants_batch(
         variants: Annotated[

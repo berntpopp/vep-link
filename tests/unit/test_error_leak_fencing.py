@@ -173,7 +173,8 @@ async def test_timeout_path_message_is_clean() -> None:
     result = await facade.call_tool("resolve_variant", {"variant": "rs6025"})
     sc = structured(result)
     mirror = _mirror(result)
-    assert sc["error_code"] == "upstream_timeout"
+    assert sc["error_code"] == "upstream_unavailable"
+    assert sc["error_subcode"] == "upstream_timeout"
     _assert_clean(sc["message"])
     _assert_clean(mirror["message"])
 
@@ -211,7 +212,7 @@ async def test_batch_row_internal_error_severed() -> None:
     svc = await _real_service_with_recoder_error(RuntimeError(f"secret /var/lib/secret.key{_CTRL}"))
     out = await svc.annotate_batch(["rs999"], GenomeBuild.GRCH38)
     row = out["errors"][0]
-    assert row["error_code"] == "internal_error"
+    assert row["error_code"] == "internal"
     _assert_clean(row["message"])
     assert "secret" not in row["message"]
     assert "/var/lib" not in row["message"]

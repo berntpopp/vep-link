@@ -92,7 +92,7 @@ Present on every success and error payload:
 | Field | Type | Description |
 |-------|------|-------------|
 | `tool` | `str` | The tool that produced the payload. |
-| `request_id` | `str` | Short (12 hex char) per-call id. On `internal_error` this doubles as the correlation id. |
+| `request_id` | `str` | Short (12 hex char) per-call id. On an `internal` error this doubles as the correlation id. |
 | `timing.elapsed_ms` | `int` | Measured wall-clock cost of the call, in milliseconds (stamped on success and error envelopes). |
 | `capabilities_version` | `str` | 12-hex-char content hash of the capabilities document; a warm client compares it to skip re-fetching `get_capabilities`. |
 | `unsafe_for_clinical_use` | `bool` | Always `true` — research-use marker. |
@@ -151,7 +151,7 @@ Failures return a deterministic, FLAT structured frame — never a nested
 }
 ```
 
-Retryable codes (`rate_limited`, `upstream_unavailable`, `upstream_timeout`)
+Retryable codes (`rate_limited`, `upstream_unavailable`)
 additionally carry a top-level `retry_after_s` backoff hint. `recovery_action`
 is a closed enum an LLM can branch on directly instead of inferring behavior
 from the bare `retryable` bool: `retry_backoff` (wait, then retry the identical
@@ -164,27 +164,30 @@ The frame above is also carried as `structuredContent` on an MCP tool result
 with `isError: true` (MCP-native), so a client sees both the protocol-level
 error signal and this actionable in-band frame.
 
-`internal_error` envelopes carry a sanitized message: the original exception
+`internal` envelopes carry a sanitized message: the original exception
 text is never surfaced; a fresh correlation id is embedded in the message and
 logged server-side so an operator can join the two.
 
 ### Error codes
 
+`error_code` is closed to the six-value GeneFoundry Response-Envelope canon; a
+client branches on exactly these:
+
 | Code | Trigger | Retryable |
 |------|---------|-----------|
-| `invalid_input` | Unparseable variant, bad arguments, disallowed `vep_options`, >200 batch variants, same-build liftover. | no |
-| `unsupported_input` | Unsupported contig/input for the operation (e.g. HGVS/rsID for liftover). | no |
+| `invalid_input` | Unparseable variant, bad arguments, disallowed `vep_options`, >200 batch variants, same-build liftover, unsupported contig (e.g. HGVS/rsID for liftover), assembly/coordinate mismatch. | no |
 | `not_found` | Recoder returns no `vcf_string`; no VEP record / no overlap; 0 liftover maps. | no |
-| `build_mismatch` | Coordinates inconsistent with the requested assembly. | no |
-| `ambiguous` | More than one liftover mapping. | no |
+| `ambiguous_query` | More than one liftover mapping. | no |
 | `rate_limited` | HTTP 429 after retries (`Retry-After` honored) or local concurrency backpressure. | yes |
-| `upstream_unavailable` | 5xx / transport error from Ensembl REST. | yes |
-| `upstream_timeout` | Upstream request timed out. | yes |
-| `output_validation_failed` | Output schema drift. | no |
-| `internal_error` | Unexpected fault (sanitized message + correlation id). | no |
+| `upstream_unavailable` | 5xx / transport error / timeout from Ensembl REST. | yes |
+| `internal` | Unexpected fault, or a refused upstream response (disallowed redirect / over-cap). Sanitized message + correlation id. | no |
 
-These ten codes are surfaced verbatim in the `get_capabilities` payload
-(`error_codes`) so a client can branch on them ahead of time.
+An **additive** `error_subcode` field carries a finer, non-normative
+classification when useful (never one of the six above): `unsupported_input`,
+`build_mismatch`, `upstream_timeout`, `output_validation_failed`. For example an
+`upstream_unavailable` timeout carries `error_subcode: "upstream_timeout"`. Both
+the six `error_codes` and the four `error_subcodes` are surfaced verbatim in the
+`get_capabilities` payload so a client can branch on them ahead of time.
 
 ### Batch per-input errors
 

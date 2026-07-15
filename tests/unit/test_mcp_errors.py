@@ -65,8 +65,9 @@ def test_local_validation_recovery_does_not_blame_ensembl() -> None:
     # liftover). Its recovery must not claim Ensembl rejected a call it never made.
     classified = _classify(UpstreamInputError("from_assembly and to_assembly must differ"))
     assert classified is not None
-    code, recovery = classified
+    code, subcode, recovery = classified
     assert code == "invalid_input"
+    assert subcode is None
     assert "Ensembl" not in recovery
 
 
@@ -80,21 +81,31 @@ def _ctx(**kwargs: Any) -> McpErrorContext:
 # ---------------------------------------------------------------------------
 
 
-def test_error_codes_has_the_ten_codes() -> None:
+def test_error_codes_is_the_closed_six_value_canon() -> None:
+    # GeneFoundry Response-Envelope v1: error_code is closed to exactly these six.
     assert ERROR_CODES == (
         "invalid_input",
-        "unsupported_input",
         "not_found",
-        "build_mismatch",
-        "ambiguous",
-        "rate_limited",
+        "ambiguous_query",
         "upstream_unavailable",
+        "rate_limited",
+        "internal",
+    )
+    assert len(ERROR_CODES) == 6
+    assert len(set(ERROR_CODES)) == 6
+
+
+def test_error_subcodes_are_additive_and_disjoint_from_canon() -> None:
+    from vep_link.mcp.errors import ERROR_SUBCODES
+
+    assert ERROR_SUBCODES == (
+        "unsupported_input",
+        "build_mismatch",
         "upstream_timeout",
         "output_validation_failed",
-        "internal_error",
     )
-    assert len(ERROR_CODES) == 10
-    assert len(set(ERROR_CODES)) == 10
+    # A subcode is NEVER one of the six canonical error_code values.
+    assert not set(ERROR_SUBCODES) & set(ERROR_CODES)
 
 
 # ---------------------------------------------------------------------------
@@ -253,18 +264,22 @@ async def test_run_mcp_tool_records_call_and_error_metrics() -> None:
 
 
 @pytest.mark.parametrize(
-    ("exc", "expected_code"),
+    ("exc", "expected_code", "expected_subcode"),
     [
-        (VariantParseError("nope"), "invalid_input"),
-        (UpstreamInputError("ensembl 400"), "invalid_input"),
-        (DataNotFoundError("no mapping"), "not_found"),
-        (AmbiguousMappingError("two maps"), "ambiguous"),
-        (RateLimitedError("429"), "rate_limited"),
-        (UpstreamTimeoutError("slow"), "upstream_timeout"),
-        (EnsemblApiError("503"), "upstream_unavailable"),
+        (VariantParseError("nope"), "invalid_input", None),
+        (UpstreamInputError("ensembl 400"), "invalid_input", None),
+        (DataNotFoundError("no mapping"), "not_found", None),
+        (AmbiguousMappingError("two maps"), "ambiguous_query", None),
+        (RateLimitedError("429"), "rate_limited", None),
+        (UpstreamTimeoutError("slow"), "upstream_unavailable", "upstream_timeout"),
+        (EnsemblApiError("503"), "upstream_unavailable", None),
     ],
 )
-async def test_run_mcp_tool_maps_each_domain_exception(exc: Exception, expected_code: str) -> None:
+async def test_run_mcp_tool_maps_each_domain_exception(
+    exc: Exception, expected_code: str, expected_subcode: str | None
+) -> None:
+    from vep_link.mcp.errors import ERROR_CODES
+
     async def body() -> dict[str, Any]:
         raise exc
 
@@ -272,6 +287,9 @@ async def test_run_mcp_tool_maps_each_domain_exception(exc: Exception, expected_
     env = _envelope(result)
     assert env["success"] is False
     assert env["error_code"] == expected_code
+    # error_code is ALWAYS one of the closed six.
+    assert env["error_code"] in ERROR_CODES
+    assert env.get("error_subcode") == expected_subcode
     assert env["fallback_tool"] == "get_capabilities"
     assert env["recovery"]
     assert isinstance(env["recovery_action"], str) and env["recovery_action"]
@@ -280,9 +298,10 @@ async def test_run_mcp_tool_maps_each_domain_exception(exc: Exception, expected_
     assert meta["unsafe_for_clinical_use"] is True
 
 
-async def test_unsupported_contig_maps_to_unsupported_input_not_invalid() -> None:
+async def test_unsupported_contig_maps_to_invalid_input_with_subcode() -> None:
     # UnsupportedContigError subclasses VariantParseError -> specificity ordering
-    # must classify it as unsupported_input, NOT invalid_input.
+    # must give it canonical invalid_input with the finer unsupported_input subcode
+    # (and its OWN recovery, distinct from the plain parse-error recovery).
     assert issubclass(UnsupportedContigError, VariantParseError)
 
     async def body() -> dict[str, Any]:
@@ -290,7 +309,9 @@ async def test_unsupported_contig_maps_to_unsupported_input_not_invalid() -> Non
 
     result = await run_mcp_tool("liftover_variant", body, _ctx(tool_name="liftover_variant"))
     env = _envelope(result)
-    assert env["error_code"] == "unsupported_input"
+    assert env["error_code"] == "invalid_input"
+    assert env["error_subcode"] == "unsupported_input"
+    assert "not supported" in env["recovery"]
 
 
 async def test_run_mcp_tool_envelope_carries_assembly_and_next_commands() -> None:
@@ -321,7 +342,7 @@ async def test_generic_exception_becomes_sanitized_internal_error() -> None:
 
     result = await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
     env = _envelope(result)
-    assert env["error_code"] == "internal_error"
+    assert env["error_code"] == "internal"
     # The raw exception text MUST NOT leak.
     assert "boom" not in env["message"]
     assert "boom" not in env["recovery"]
@@ -343,7 +364,7 @@ async def test_unknown_vep_link_error_maps_to_internal_error() -> None:
 
     result = await run_mcp_tool("resolve_variant", body, _ctx())
     env = _envelope(result)
-    assert env["error_code"] == "internal_error"
+    assert env["error_code"] == "internal"
     assert "secret detail" not in env["message"]
     assert "correlation_id" in env["message"]
 
@@ -358,7 +379,7 @@ async def test_internal_error_does_not_leak_raw_message() -> None:
     # The sanitized envelope hides the raw exception text everywhere.
     assert "boom-detail" not in env["message"]
     assert "boom-detail" not in env["recovery"]
-    assert env["error_code"] == "internal_error"
+    assert env["error_code"] == "internal"
 
 
 async def test_internal_error_log_excludes_exception_detail() -> None:
@@ -376,7 +397,7 @@ async def test_internal_error_log_excludes_exception_detail() -> None:
         result = await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
 
     env = _envelope(result)
-    assert env["error_code"] == "internal_error"
+    assert env["error_code"] == "internal"
 
     internal = [e for e in logs if e.get("event") == "mcp_internal_error"]
     assert internal, "expected an mcp_internal_error log record"

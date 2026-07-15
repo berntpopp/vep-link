@@ -35,6 +35,7 @@ def register_resolve_tools(
         title="Resolve Variant to Coordinates",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"resolve"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def resolve_variant(
         variant: Annotated[

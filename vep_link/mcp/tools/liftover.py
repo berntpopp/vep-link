@@ -35,6 +35,7 @@ def register_liftover_tools(
         title="Liftover Variant Between Assemblies",
         annotations=READ_ONLY_OPEN_WORLD,
         tags={"liftover"},
+        output_schema=None,  # Tool-Surface Budget v1: suppress optional outputSchema
     )
     async def liftover_variant(
         variant: Annotated[
@@ -51,11 +52,17 @@ def register_liftover_tools(
         ],
         from_assembly: Annotated[
             Literal["GRCh38", "GRCh37"],
-            Field(description="Source assembly of the input coordinate."),
+            Field(
+                description="Source assembly of the input coordinate.",
+                examples=["GRCh37"],
+            ),
         ],
         to_assembly: Annotated[
             Literal["GRCh38", "GRCh37"],
-            Field(description="Target assembly to lift the coordinate to."),
+            Field(
+                description="Target assembly to lift the coordinate to (must differ from from_assembly).",
+                examples=["GRCh38"],
+            ),
         ],
     ) -> dict[str, Any]:
         """Use this to map a genomic coordinate (CHR-POS-REF-ALT) from one human assembly to the other (GRCh37 <-> GRCh38) via the Ensembl assembly-map endpoint. The two assemblies must differ. A unique mapping returns the lifted coordinate; zero mappings -> not_found, multiple -> ambiguous. HGVS/rsID inputs are unsupported (resolve_variant them first)."""

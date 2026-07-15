@@ -156,3 +156,43 @@ def test_meta_hint_all_ok_has_no_advice(health_settings: Settings) -> None:
     hint = h.meta_hint()
     assert hint["GRCh38"] == "ok"
     assert "advice" not in hint
+
+
+def test_fallback_advice_is_endpoint_honest_not_a_guaranteed_fix(
+    health_settings: Settings,
+) -> None:
+    # vep tracks health PER HOST via /info/ping, not per endpoint. Advising the
+    # model to "retry the other build" as a guaranteed fix misdirects when the
+    # failing endpoint (e.g. variant_recoder) is dead on BOTH builds. The advice
+    # must name the ping caveat and NOT promise the other host will succeed.
+    clock = FakeClock()
+    h = UpstreamHealth(health_settings, clock=clock)
+    for _ in range(health_settings.CIRCUIT_FAILURE_THRESHOLD):
+        h.record_failure("GRCh38", error=EnsemblApiError("boom"))
+    advice = h.meta_hint()["advice"]
+    assert "GRCh37" in advice
+    assert "/info/ping" in advice  # names the (host-level) health signal
+    # Must NOT claim the other host is simply "healthy" / a sure retry target.
+    assert "currently healthy" not in advice
+    assert "endpoint-wide" in advice
+
+
+def test_host_view_reports_accepting_true_when_open_but_cooled_down(
+    health_settings: Settings,
+) -> None:
+    # The audit's "breaker open-but-passing": an open breaker whose cooldown has
+    # elapsed still lets the next call through. The snapshot must say so, so
+    # circuit=open is never silently contradicted by a call that succeeds.
+    clock = FakeClock()
+    h = UpstreamHealth(health_settings, clock=clock)
+    for _ in range(3):
+        h.record_failure("GRCh38")
+    view_open = h.snapshot()["GRCh38"]
+    assert view_open["circuit"] == "open"
+    assert view_open["accepting"] is False  # inside cooldown: really blocking
+    clock.advance(31)  # past the 30s cooldown
+    # Reading the view MUST NOT mutate breaker state (no side effect in a getter).
+    view_cooled = h.snapshot()["GRCh38"]
+    assert view_cooled["circuit"] == "open"
+    assert view_cooled["accepting"] is True  # honest: allow() would now pass
+    assert h._host("GRCh38").state == "open"  # snapshot did not flip it
