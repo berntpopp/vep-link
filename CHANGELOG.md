@@ -6,12 +6,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-
-- Re-vendored the behaviour conformance gate from genefoundry-router `56db958`
-  (`docs/conformance/behaviour.py` blob `c69801687`) so live MCP contract checks
-  treat not-found example probes as inconclusive and keep empty auxiliary objects from hiding counted rows.
-
 ## [1.1.0] - 2026-07-15
 
 GeneFoundry MCP contract-hardening sweep — brings vep-link into compliance with the
@@ -22,6 +16,10 @@ CONFORMANT (0 fail, 0 UNGATED) and wired into `.github/workflows/conformance.yml
 Research use only.
 
 ### Changed
+
+- Re-vendored the behaviour conformance gate from genefoundry-router `56db958`
+  (`docs/conformance/behaviour.py` blob `c69801687`) so live MCP contract checks
+  treat not-found example probes as inconclusive and keep empty auxiliary objects from hiding counted rows.
 
 - **`error_code` is now closed to the six-value GeneFoundry canon** —
   `invalid_input · not_found · ambiguous_query · upstream_unavailable · rate_limited ·
