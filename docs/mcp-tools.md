@@ -1,23 +1,28 @@
 # MCP Tool Reference
 
-`vep-link` exposes **six** MCP tools over Streamable HTTP (and stdio). All tools
-are read-only, idempotent Ensembl lookups, carry `annotations=READ_ONLY_OPEN_WORLD`,
-and return a payload with a `_meta` block. Failures return the structured error
-envelope (see [api.md](api.md)) instead of raising.
+`vep-link` exposes **seven** MCP tools over Streamable HTTP (and stdio). The seven
+registered tools are read-only, idempotent Ensembl operations and carry
+`annotations=READ_ONLY_OPEN_WORLD`. Each section below documents its tool's
+success fields and error behavior; shared error-envelope fields are defined in
+[api.md](api.md).
 
 Canonical workflow: `get_capabilities` (discovery) → `resolve_variant` (any input
 → canonical coordinate) → `recode_variant` (equivalent IDs, optional) →
 `annotate_variant` / `annotate_variants_batch` (full VEP) → `liftover_variant`
 (cross-build coordinate conversion).
 
+The registry also includes `check_upstream_health`, an on-demand diagnostic for
+the GRCh38 and GRCh37 Ensembl REST hosts. Call it before a large batch or after
+upstream failures; it is not a variant-processing step in the workflow above.
+
 > **Research use only; not for clinical decision support.**
 
 ---
 
-## Common envelope
+## Common metadata
 
-Every success payload carries `_meta` (see [api.md](api.md) for the full field
-list):
+Successful payload bodies are tool-specific. Where the examples below include
+`_meta`, its shared fields are described fully in [api.md](api.md):
 
 ```json
 "_meta": {
@@ -540,6 +545,59 @@ than one mapping → `ambiguous_query`.
 **Error codes.** `invalid_input`, `not_found`, `ambiguous_query`,
 `rate_limited`, `upstream_unavailable`, `internal` (finer detail in the additive
 `error_subcode`, e.g. `unsupported_input`, `upstream_timeout`).
+
+---
+
+## `check_upstream_health`
+
+**Purpose.** Run a fresh `/info/ping` probe against both Ensembl REST hosts and
+return their circuit-breaker snapshots. Use it before a large batch or when
+variant calls begin failing. Unlike the passive health hints attached to normal
+tool activity, this diagnostic intentionally performs two live upstream probes.
+
+**Arguments.** None.
+
+**Example call.**
+
+```json
+{"name": "check_upstream_health", "arguments": {}}
+```
+
+**Example success payload.** A monitored transport returns an `upstream` object
+keyed by assembly. Each host entry reports `status` (`ok`, `degraded`,
+`recovering`, or `down`), raw circuit state, whether the next request would be
+accepted, probe reachability and timing, and a bounded last-error class name.
+
+```json
+{
+  "upstream": {
+    "GRCh38": {
+      "status": "ok",
+      "circuit": "closed",
+      "accepting": true,
+      "reachable": true,
+      "checked_at": "2026-06-17T12:00:00+00:00",
+      "latency_ms": 42,
+      "last_error": null
+    },
+    "GRCh37": {
+      "status": "ok",
+      "circuit": "closed",
+      "accepting": true,
+      "reachable": true,
+      "checked_at": "2026-06-17T12:00:00+00:00",
+      "latency_ms": 38,
+      "last_error": null
+    }
+  },
+  "_meta": {"tool": "check_upstream_health", "request_id": "...", "...": "..."}
+}
+```
+
+Probe failures are represented in the affected host entry rather than hiding
+the other host's state. A transport without health monitoring returns an empty
+`upstream` object plus a note. Unexpected tool-boundary faults use the standard
+`internal` error envelope.
 
 ---
 

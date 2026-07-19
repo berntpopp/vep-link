@@ -3,6 +3,8 @@
 **Date:** 2026-06-16
 **Status:** Approved (active probe + passive breaker; Core scope)
 
+> Historical record — this document records the approved upstream-health design.
+
 ## Problem
 
 Ensembl REST has periodic outages (observed: `rest.ensembl.org`/GRCh38 returning

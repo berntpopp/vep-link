@@ -1,6 +1,9 @@
 # vep-link — Design Specification
 
 **Date:** 2026-06-16
+
+> Historical record — this document records the approved original design.
+
 **Author:** Bernt Popp
 **Status:** Approved
 **License:** MIT
