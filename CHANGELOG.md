@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-07-30
+
+### Changed
+
+- **CI tests the interpreter that actually ships.** The `quality` job now runs
+  on a `["3.12", "3.14"]` matrix instead of 3.12 only. `docker/Dockerfile` ships
+  `python:3.14-slim`, so until now the test suite was never exercised on the
+  interpreter that reaches production — only the image itself was, via
+  `container-ci`/`conformance`. A 3.14-only stdlib or typing regression would
+  have shipped uncaught. 3.12 stays in the matrix because it is the declared
+  `requires-python` floor; dropping it would make that floor a false claim. The
+  coverage gate still runs once (on 3.14, push to `main`). `requires-python`,
+  ruff `target-version` and mypy `python_version` are deliberately unchanged at
+  3.12.
+- **Each leg's interpreter is stated, not inferred.** The job exports
+  `UV_PYTHON: ${{ matrix.python-version }}`. This repo has no `.python-version`,
+  so `uv` would otherwise fall back to `PATH` discovery — and if a
+  `.python-version` were ever added it would outrank `PATH` and silently pin
+  both legs to one interpreter while the UI still reported two. The env var also
+  covers every `uv run` inside `make ci-local`, not just the explicit `uv sync`.
+- **New guard `tests/unit/test_ci_python_matrix.py`.** Pins the matrix against
+  `pyproject.toml`'s floor and the Dockerfile's `FROM python:<x.y>-slim`, so a
+  base-image bump that is not mirrored into CI fails instead of silently
+  re-opening the blind spot.
+
 ## [1.1.1] - 2026-07-30
 
 Maintenance release. **Dependabot coverage was added to this repository for the first
