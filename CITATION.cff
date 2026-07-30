@@ -13,7 +13,7 @@ authors:
   given-names: Bernt
   email: bernt.popp@charite.de
   affiliation: Charité – Universitätsmedizin Berlin
-version: 1.0.9
+version: 1.1.1
 license: MIT
 repository-code: https://github.com/berntpopp/vep-link
 url: https://genefoundry.org
