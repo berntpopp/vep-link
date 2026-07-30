@@ -6,6 +6,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-07-30
+
+Maintenance release. **Dependabot coverage was added to this repository for the first
+time.** Until now there was no `.github/dependabot.yml`, and without a config Dependabot
+runs *security* updates only — so vep-link had never received a single version update.
+Everything security updates do not touch (the Docker base digest, the GitHub Actions
+pins, the CodeQL pin) had been drifting unbounded. This release adds the config and
+sweeps the accumulated drift. No functional or wire-contract change.
+
+### Added
+
+- `.github/dependabot.yml` covering all four ecosystems present in the repo: `uv` at `/`,
+  `github-actions` at `/`, `docker` at `/docker`, and `docker-compose` at `/docker`.
+  Weekly Monday, Europe/Berlin, staggered 04:00/04:15/04:30/04:45, five open PRs per
+  ecosystem, `deps`/`ci` commit prefixes — byte-identical to the fleet-standard shape.
+
+### Changed
+
+- **Lint policy is now pinned with `select` instead of `extend-select`.** ruff 0.16 grows
+  the implicit default rule set from 59 to 413 rules; under `extend-select` this repo
+  would have silently inherited ~350 rules it never opted into. The rule list is
+  unchanged and already supersets the pre-0.16 default (E4/E7/E9 + F), so the effective
+  policy is identical — `ruff check` still reports zero findings.
+- Dependencies swept with `uv lock --upgrade` (35 packages). Notable: ruff 0.15.17 →
+  0.16.0, fastapi 0.137.1 → 0.141.1, mypy 2.1.0 → 2.3.0, uvicorn 0.49.0 → 0.52.0,
+  fastmcp 3.4.4 → 3.4.5, mcp 1.28.1 → 1.29.0, typer 0.26.7 → 0.27.0, prometheus-client
+  0.25.0 → 0.26.0, certifi 2026.5.20 → 2026.7.22. Version floors in `pyproject.toml` are
+  deliberately unchanged: this repo's convention is a permissive floor plus a major upper
+  cap, and the floor is a compatibility claim rather than a mirror of the lock.
+- Docker base digest refreshed **within the same Python line** — `python:3.14-slim`
+  `sha256:b877e50b` → `sha256:cea0e604`. Both are Python 3.14.6; the move is Debian 13.5
+  → 13.6. Not a Python-line jump, because `container-release.json`'s `image_allowlist`
+  entries are interpreter-versioned and crossing a Python minor would relocate them out
+  from under the release gate's content inspector. Verified against the actual image that
+  `/usr/bin/perl5.40.1` still exists, so the prepared stage's hardlink guard still holds.
+- GitHub Actions pins refreshed: `actions/checkout` v7.0.0 → v7.0.1,
+  `actions/setup-python` v6.3.0 → v7.0.0, `astral-sh/setup-uv` v8.2.0 → v9.0.0.
+
+### Fixed
+
+- **`container-security.yml` was a whole major behind** on `actions/checkout`, pinned to
+  `df4cb1c0` labelled `# v6.0.3`. That SHA is not what `v6.0.3` points at (`9f698171`);
+  it is the untagged "Update changelog for v6.0.3" commit. Now `v7.0.1`, matching every
+  other checkout in the repo.
+- **The CodeQL pin was frozen and untrackable.** `github/codeql-action@ed410739 # v4` is
+  a *tag-object* SHA, which Dependabot cannot follow — it would have stayed stuck even
+  after the new config started running. Repinned to the dereferenced commit
+  `f205ea1c` (= v4.37.4), matching the fleet decision made in genefoundry-router v0.7.3.
+- `CITATION.cff` `version:` was stale at 1.0.9 (it had not been regenerated for the 1.1.0
+  release); now 1.1.1.
+
 ## [1.1.0] - 2026-07-15
 
 GeneFoundry MCP contract-hardening sweep — brings vep-link into compliance with the
