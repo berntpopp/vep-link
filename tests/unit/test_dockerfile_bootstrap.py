@@ -30,3 +30,11 @@ def test_uv_copy_precedes_uv_sync() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "uv sync" in text, "builder should still run uv sync"
     assert text.index(UV_COPY) < text.index("uv sync"), "uv must be COPYed before uv sync"
+
+
+def test_runtime_image_removes_unused_pip_installations() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "/usr/local/lib/python*/site-packages/pip" in text
+    assert "/opt/venv/lib/python*/site-packages/pip" in text
+    assert "/usr/local/bin/pip3.14" in text
+    assert "/opt/venv/bin/pip3.14" in text
