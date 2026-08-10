@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for vep-link.
 
 # --- Builder Stage ---
-FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS builder
+FROM python:3.14-slim@sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -31,7 +31,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.7@sha256:1e26f9a868360eeb32500a35e05787ffff
 RUN uv sync --frozen --no-dev --active --no-install-project
 
 # --- Prepared Stage ---
-FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS prepared
+FROM python:3.14-slim@sha256:a7fb1e634c4a578f9e0bd6327f11a3cde11b7a9395f48e24360c0988bcc5c2bc AS prepared
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -62,7 +62,14 @@ COPY --chown=app:app ./pyproject.toml ./README.md ./
 
 RUN /opt/venv/bin/pip install -e . --no-deps
 
-RUN rm -rf /root/.cache/pip /usr/local/lib/python*/ensurepip \
+RUN rm -rf /root/.cache/pip \
+    /usr/local/lib/python*/ensurepip \
+    /usr/local/lib/python*/site-packages/pip \
+    /usr/local/lib/python*/site-packages/pip-*.dist-info \
+    /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.14 \
+    /opt/venv/lib/python*/site-packages/pip \
+    /opt/venv/lib/python*/site-packages/pip-*.dist-info \
+    /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.14 \
     && find / -xdev -type d -name __pycache__ -prune -exec rm -rf '{}' + \
     && find / -xdev -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
 RUN find / -xdev -perm /6000 -exec chmod a-s '{}' + \
