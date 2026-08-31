@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refresh the pinned Python base image, and make the production server restart persistent.
 - README validation now identifies the Git remote, so an isolated Git worktree validates
   the repository badges correctly.
+- Upgrade Debian packages during the image build and remove bootstrap `setuptools` from the
+  production virtual environment to remediate fixable OpenSSL and packaging-tool findings.
 
 ## [1.1.3] - 2026-08-10
 
