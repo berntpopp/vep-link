@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-03
+
+- Update FastAPI and pytest-mock to the current dependency releases.
 
 ## [1.1.7] - 2026-10-03
 
