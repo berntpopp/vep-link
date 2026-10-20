@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-10-20
+
+### Security
+
+- Fix open Dependabot alert on `mcp` by raising the floor to `mcp[cli]>=1.30.0` (fixed in 1.30.0).
+
+### Changed
+
+- Consolidate Dependabot Python updates (mcp 1.30.0, mypy 2.4.0, ruff 0.17.1, pydantic 2.14.1, fastapi, pre-commit and transitive packages).
+- Bump GitHub Actions: setup-uv v10.3.0, upload-artifact v7.0.2, codeql-action v4.38.3.
+- Pin reusable container workflows to the verified router v0.10.4 source.
+
 ## [1.1.8] - 2026-10-03
 
 - Update FastAPI and pytest-mock to the current dependency releases.
