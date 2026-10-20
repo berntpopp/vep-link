@@ -9,7 +9,7 @@ description = "A unified server providing REST API and MCP interfaces for Ensemb
 readme = "README.md"
 authors = [{ name = "Bernt Popp" }]
 license = { text = "MIT" }
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -17,8 +17,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -69,7 +67,9 @@ packages = ["vep_link"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
+# Vendored byte-identical from genefoundry-router docs/conformance/; never reformat.
+extend-exclude = ["tests/conformance/behaviour.py"]
 
 [tool.ruff.lint]
 # `select` (not `extend-select`): ruff 0.16 grew the implicit default rule set
@@ -113,7 +113,7 @@ line-ending = "lf"
 "tests/**/*" = ["S101", "T20"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = false
 disallow_untyped_defs = false
