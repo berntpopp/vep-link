@@ -22,10 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.12 is the `requires-python` floor; 3.14 is the interpreter the
-        # container actually ships (docker/Dockerfile). Both ends are tested so a
-        # base-image bump can never ship an interpreter CI has not exercised.
-        python-version: ["3.12", "3.14"]
+        # 3.14 is the `requires-python` floor and the interpreter the container
+        # ships (docker/Dockerfile). Single version: one interpreter fleet-wide.
+        python-version: ["3.14"]
 
     env:
       # This repo has no `.python-version`, so `uv` would fall back to PATH

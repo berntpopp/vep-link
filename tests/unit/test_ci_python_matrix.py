@@ -1,18 +1,13 @@
 """CI must run the test suite on the interpreter the container actually ships.
 
-``docker/Dockerfile`` ships ``python:3.14-slim``, but the CI test job ran only on
-Python 3.12. ``container-ci``/``conformance`` exercise the *image* on 3.14; the
-unit suite never did, so a 3.14-only stdlib or typing regression could ship
-uncaught.
-
-Both ends of the matrix are required. 3.12 is the declared ``requires-python``
-floor -- drop it and the floor is a false claim. 3.14 is what reaches
-production.
+``docker/Dockerfile`` ships ``python:3.14-slim``. The fleet is pinned to Python 3.14,
+so the CI matrix runs that single interpreter; the ``requires-python`` floor and the
+shipped image must both stay in the matrix, so a bump of either is caught here.
 
 ``UV_PYTHON`` is what makes the matrix a fact rather than an ordering accident.
 ``uv`` picks its interpreter from ``.python-version`` first and ``PATH`` only
 after; this repo currently has no ``.python-version``, so adding one later would
-silently pin both legs to a single interpreter while the UI kept reporting two.
+silently pin the interpreter elsewhere while CI still reported the matrix value.
 """
 
 from __future__ import annotations

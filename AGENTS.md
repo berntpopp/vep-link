@@ -64,7 +64,7 @@ Useful focused commands: `make install`, `make format`, `make lint`,
 
 - Use `uv` for dependency management; never `pip install` directly.
 - Use modern Python typing: `list[str]`, `dict[str, int]`, `str | None`.
-- Format and lint with Ruff; type check with mypy targeting Python 3.12.
+- Format and lint with Ruff; type check with mypy targeting Python 3.14.
 - Keep MCP tool and service behavior covered by unit tests.
 - Every input is normalized to canonical `CHR-POS-REF-ALT` before VEP. Do not
   reintroduce per-type VEP GET endpoints on the main annotation path; resolve via
