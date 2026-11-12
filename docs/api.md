@@ -121,6 +121,7 @@ which owns hard failures. Each entry is `{code, message, context}`:
 |--------|-------------|-----------|
 | `multiple_alts` | A single input resolved to several ALT alleles (all returned in `variants[]`). | `{count, variants}` |
 | `ref_not_validated` | A lifted REF did not match the target-assembly reference base (alleles omitted; coordinate-only `lifted`). | `{expected_ref, carried_ref}` |
+| `resolved_via_vep_hgvs` | The Variant Recoder failed upstream, so the HGVS was resolved through VEP's own HGVS endpoint (single pick). | `{resolution_path, unavailable}` |
 
 The codes are advertised in `get_capabilities` under `warning_codes`.
 

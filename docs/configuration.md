@@ -18,6 +18,8 @@ uv run vep-link config --validate
 | `VEP_LINK_REQUEST_TIMEOUT` | `30` | Per-attempt upstream read timeout (s). |
 | `VEP_LINK_CONNECT_TIMEOUT` | `10.0` | Connection (TCP/TLS) timeout (s) — fast-fail on a stalled handshake. |
 | `VEP_LINK_OVERALL_DEADLINE_SECONDS` | `45.0` | Hard wall-clock cap on one request across all retries. |
+| `VEP_LINK_HGVS_FALLBACK_DEADLINE_SECONDS` | `30.0` | Budget for the VEP-HGVS fallback when the Variant Recoder fails for an HGVS input. |
+| `VEP_LINK_BATCH_RECODE_DEADLINE_SECONDS` | `60.0` | Deadline for a batch's (concurrent) recoding phase; unreached inputs become per-input `upstream_unavailable` errors. |
 | `VEP_LINK_MAX_CONCURRENCY` | `5` | Concurrent upstream request cap. |
 | `VEP_LINK_QUEUE_WAIT_TIMEOUT` | `20` | Max wait (s) for a concurrency slot before backpressure. |
 | `VEP_LINK_MAX_RETRIES` | `2` | Retry attempts on retryable failures. |

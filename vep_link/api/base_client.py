@@ -169,13 +169,17 @@ class BaseHTTPClient:
         params: dict[str, Any] | None = None,
         *,
         headers: dict[str, str] | None = None,
+        deadline: float | None = None,
     ) -> Any:
-        """GET ``url`` with ``params``, returning parsed JSON (dict or list)."""
+        """GET ``url`` with ``params``, returning parsed JSON (dict or list).
+
+        ``deadline`` overrides ``OVERALL_DEADLINE_SECONDS`` for this call.
+        """
 
         def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> Any:
             return client.stream("GET", url, params=params, headers=headers, timeout=timeout)
 
-        return await self._request(url, _send)
+        return await self._request(url, _send, deadline)
 
     async def post_json(
         self,
@@ -240,6 +244,7 @@ class BaseHTTPClient:
         self,
         url: str,
         send: Any,
+        deadline: float | None = None,
     ) -> Any:
         """Run ``send`` through the bounded-concurrency, jittered-retry loop.
 
@@ -252,7 +257,9 @@ class BaseHTTPClient:
         """
         client = await self._ensure_client()
         loop = asyncio.get_running_loop()
-        op_deadline = loop.time() + self._settings.OVERALL_DEADLINE_SECONDS
+        op_deadline = loop.time() + (
+            self._settings.OVERALL_DEADLINE_SECONDS if deadline is None else deadline
+        )
         max_retries = self._settings.MAX_RETRIES
         last_exc: BaseException | None = None
 

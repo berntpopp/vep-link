@@ -10,8 +10,8 @@ from __future__ import annotations
 from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
-    first_canonical_vcf_string,
     project_recode_fields,
+    vep_vcf_strings,
 )
 
 
@@ -44,14 +44,10 @@ def test_canonical_vcf_strings_empty_when_none() -> None:
     assert canonical_vcf_strings("not-a-list") == []
 
 
-def test_first_canonical_delegates_to_sorted_first() -> None:
-    payload = [{"T": {"vcf_string": ["1-100-C-T"]}, "A": {"vcf_string": ["1-100-C-A"]}}]
-    # Deterministic: the alphabetically-first canonical, not dict-iteration order.
-    assert first_canonical_vcf_string(payload) == "1-100-C-A"
-
-
-def test_first_canonical_none_when_empty() -> None:
-    assert first_canonical_vcf_string([]) is None
+def test_vep_vcf_strings_keeps_only_genomic_canonical() -> None:
+    payload = [{"vcf_string": "12-57807649-G-T"}, {"vcf_string": "LRG_1-5-G-A"}, "junk"]
+    assert vep_vcf_strings(payload) == ["12-57807649-G-T"]
+    assert vep_vcf_strings({"error": "x"}) == []
 
 
 def test_aggregate_omits_empty_fields() -> None:

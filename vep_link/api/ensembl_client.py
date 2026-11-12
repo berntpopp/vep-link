@@ -135,6 +135,19 @@ class EnsemblClient:
         result: list[dict] = await self._http.get_json(url, _vep_params(options))
         return result
 
+    async def vep_hgvs_vcf(self, hgvs: str, build: GenomeBuild) -> Any:
+        """Resolve HGVS to ``CHR-POS-REF-ALT`` via VEP's own HGVS parser (recoder fallback).
+
+        Lean options only (no plugins), under the shorter
+        ``HGVS_FALLBACK_DEADLINE_SECONDS`` budget, since the recoder already spent its own.
+        """
+        url = f"{self._settings.vep_url(build)}{VEP_HGVS_PATH}/{quote(hgvs, safe='')}"
+        return await self._http.get_json(
+            url,
+            {"vcf_string": "1", "pick": "1"},
+            deadline=self._settings.HGVS_FALLBACK_DEADLINE_SECONDS,
+        )
+
     async def vep_id_get(
         self, rsid: str, build: GenomeBuild, *, options: dict[str, str] | None = None
     ) -> list[dict]:

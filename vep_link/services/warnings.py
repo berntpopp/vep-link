@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["multiple_alts_warning", "ref_not_validated_warning"]
+__all__ = ["multiple_alts_warning", "ref_not_validated_warning", "resolved_via_vep_hgvs_warning"]
 
 
 def multiple_alts_warning(variants: list[str]) -> dict[str, Any]:
@@ -44,4 +44,20 @@ def ref_not_validated_warning(*, expected: str, carried: str) -> dict[str, Any]:
             "alleles omitted. Re-resolve in the target assembly for a usable variant."
         ),
         "context": {"expected_ref": expected, "carried_ref": carried},
+    }
+
+
+def resolved_via_vep_hgvs_warning() -> dict[str, Any]:
+    """Signal that HGVS was resolved by VEP's HGVS parser because the recoder failed.
+
+    Names the resolution path (#111): the coordinate is VEP's single pick, not the
+    Variant Recoder's full allele set.
+    """
+    return {
+        "code": "resolved_via_vep_hgvs",
+        "message": (
+            "Ensembl Variant Recoder was unavailable; the HGVS was resolved through "
+            "VEP's own HGVS endpoint instead."
+        ),
+        "context": {"resolution_path": "vep_hgvs", "unavailable": "variant_recoder"},
     }
