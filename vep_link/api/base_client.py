@@ -55,7 +55,7 @@ _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # Deterministic client errors: the request shape is wrong and will never succeed.
 _INPUT_ERROR_STATUS = frozenset({400, 404, 410, 422})
 # Bounded read of a 400 body: matched against fixed patterns only, never surfaced.
-_MAX_400_BODY_BYTES = 4096
+_MAX_400_BODY_BYTES = 64 * 1024
 # (substring of Ensembl's 400 ``error`` text, fixed caller-facing message).
 _KNOWN_400_MESSAGES: tuple[tuple[str, str], ...] = (
     (
@@ -210,9 +210,9 @@ class BaseHTTPClient:
         ``raise_for_status`` WITHOUT reading the body (so the caller's fixed,
         body-free ``_safe_upstream_input_message`` handles it and no upstream
         prose is surfaced). A 400 alone gets a bounded body read, matched only
-        against fixed patterns to pick a fixed message (never echoed). On success it accumulates ``aiter_bytes`` -- httpx
-        auto-decompresses gzip, so the running total bounds *decoded* bytes --
-        and raises :class:`ResponseTooLargeError` (NON-RETRYABLE) the instant the
+        against fixed patterns to pick a fixed message (never echoed). On
+        success it accumulates ``aiter_bytes`` -- httpx auto-decompresses
+        gzip, so the running total bounds *decoded* bytes -- and raises :class:`ResponseTooLargeError` (NON-RETRYABLE) the instant the
         total exceeds the cap, failing closed rather than truncating. The URL
         guard runs as the client's request event-hook, so a disallowed hop raises
         ``DisallowedURLError`` here at connect time; neither guard exception is an
