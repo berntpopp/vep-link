@@ -377,3 +377,56 @@ async def test_connect_timeout_is_short(settings: Settings) -> None:
         assert c._timeout.read == settings.REQUEST_TIMEOUT
     finally:
         await c.aclose()
+
+
+# --- 400 classification (#51 / #115) ---------------------------------------
+
+
+@respx.mock
+async def test_400_without_ensembl_error_body_is_transient_and_retried(
+    client: BaseHTTPClient,
+) -> None:
+    """Ensembl always explains a real rejection as JSON ``{"error": ...}``; a bare 400 is a flake."""
+    route = respx.get(URL).mock(
+        side_effect=[httpx.Response(400, text="<html>busy</html>"), httpx.Response(200, json=[])]
+    )
+    try:
+        assert await client.get_json(URL) == []
+    finally:
+        await client.aclose()
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_400_without_error_body_exhausted_is_upstream_fault(client: BaseHTTPClient) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(400))
+    try:
+        with pytest.raises(EnsemblApiError):
+            await client.get_json(URL)
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_400_unknown_transcript_gets_fixed_actionable_message(client: BaseHTTPClient) -> None:
+    body = {"error": "Unable to parse HGVS 'X<script>': Could not get a Transcript object for 'X'"}
+    respx.get(URL).mock(return_value=httpx.Response(400, json=body))
+    try:
+        with pytest.raises(UpstreamInputError) as info:
+            await client.get_json(URL)
+    finally:
+        await client.aclose()
+    msg = str(info.value)
+    assert "transcript" in msg.lower() and "version" in msg.lower()
+    assert "<script>" not in msg and "'X'" not in msg  # body never reflected
+
+
+@respx.mock
+async def test_400_ref_mismatch_gets_fixed_message(client: BaseHTTPClient) -> None:
+    body = {"error": "Reference allele extracted from X (T) does not match reference allele"}
+    respx.get(URL).mock(return_value=httpx.Response(400, json=body))
+    try:
+        with pytest.raises(UpstreamInputError, match="reference allele"):
+            await client.get_json(URL)
+    finally:
+        await client.aclose()
