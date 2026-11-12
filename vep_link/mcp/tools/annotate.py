@@ -269,7 +269,7 @@ def register_annotate_tools(
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Use this to annotate many variants (cap 200) in one call instead of looping annotate_variant. Returns a results list (each shaped to response_mode and tagged with its original input), a per-input errors list (parse/not-found failures that did not fail the batch), and a summary count. Identical canonical variants are de-duplicated into a single VEP request. Each result's standard-tier transcript list is filtered by default; per-result truncation is reported in that result's transcripts_summary."""
+        """Use this to annotate many variants (cap 200) in one call instead of looping annotate_variant. Returns a results list (each shaped to response_mode and tagged with its original input; a multi-allelic input such as rs6025 yields one result per ALT allele), a per-input errors list (parse/not-found failures that did not fail the batch), and a summary count. Identical canonical variants are de-duplicated into a single VEP request. Each result's standard-tier transcript list is filtered by default; per-result truncation is reported in that result's transcripts_summary."""
 
         health = health_factory() if health_factory else None
 

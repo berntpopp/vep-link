@@ -653,3 +653,24 @@ async def test_batch_of_200_slow_recodes_returns_partial_results_within_deadline
     assert late and all(e["error_code"] == "upstream_unavailable" for e in late)
     assert 1 < peak <= fast.MAX_CONCURRENCY
     assert in_flight == 0  # nothing left running after the deadline
+
+
+async def test_annotate_batch_expands_multi_allelic_input_to_every_alt(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # rs6025 has two ALTs; the batch must not silently keep only the first.
+    client.recoder_get_return = [
+        {
+            "input": "rs6025",
+            "A": {"vcf_string": ["1-1000-A-C"]},
+            "T": {"vcf_string": ["1-1000-A-T"]},
+        }
+    ]
+    client.vep_region_post_return = [
+        _vep_record("1 1000 . A C . . ."),
+        _vep_record("1 1000 . A T . . ."),
+    ]
+    result = await service.annotate_batch(["rs6025", "1-1000-A-T"], GRCH38)
+    rs_rows = [r["variant_id"] for r in result["results"] if r["input"] == "rs6025"]
+    assert rs_rows == ["1-1000-A-C", "1-1000-A-T"]
+    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0}

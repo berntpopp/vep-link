@@ -267,7 +267,9 @@ class VepService:
         """Annotate many variants; collect per-input errors, never fail wholesale.
 
         Identical canonical variants are de-duplicated into a single VEP region
-        POST and the resulting record is fanned out to every original input.
+        POST and the resulting record is fanned out to every original input. A
+        multi-allelic input yields one result row per ALT allele;
+        ``summary.annotated`` counts inputs, not rows.
         Returns ``{"results", "errors", "summary"}``.
         """
         requested = len(variants)
@@ -281,18 +283,19 @@ class VepService:
         canonical_to_inputs: dict[str, list[str]] = {}
         # canonical id -> its VEP region line.
         canonical_to_line: dict[str, str] = {}
+        resolved: list[str] = []
 
         # Recode concurrently (bounded to the client's own slot count so no task
         # trips its queue-wait) under one deadline that leaves room for the VEP
         # POST inside the router's 120 s (#114).
         slots = asyncio.Semaphore(max(1, self._settings.MAX_CONCURRENCY))
 
-        async def first_pair(original: str) -> tuple[str, str]:
+        async def all_pairs(original: str) -> list[tuple[str, str]]:
             async with slots:
                 pairs, _ = await self._canonical_lines(original, build, None)
-            return pairs[0]
+            return pairs
 
-        tasks = [asyncio.create_task(first_pair(original)) for original in variants]
+        tasks = [asyncio.create_task(all_pairs(original)) for original in variants]
         try:
             _done, pending = (
                 await asyncio.wait(tasks, timeout=self._settings.BATCH_RECODE_DEADLINE_SECONDS)
@@ -320,20 +323,24 @@ class VepService:
             elif exc is not None:  # last-resort: one bad input cannot crash the batch
                 errors.append(self._batch_error(original, "internal", exc))
             else:
-                canonical, vep_line = task.result()
-                canonical_to_inputs.setdefault(canonical, []).append(original)
-                canonical_to_line[canonical] = vep_line
+                resolved.append(original)
+                # A multi-allelic input yields one result per ALT, never a silent pick.
+                for canonical, vep_line in task.result():
+                    canonical_to_inputs.setdefault(canonical, []).append(original)
+                    canonical_to_line[canonical] = vep_line
 
         results = await self._annotate_unique(
             canonical_to_inputs, canonical_to_line, build, vep_options
         )
+        annotated_inputs = {row["input"] for row in results}
 
         return {
             "results": results,
             "errors": errors,
             "summary": {
                 "requested": requested,
-                "annotated": len(results),
+                # Inputs (not ALT rows) that got at least one annotation.
+                "annotated": sum(1 for v in resolved if v in annotated_inputs),
                 "failed": len(errors),
             },
         }
