@@ -12,7 +12,7 @@ canonical forms the rest of the pipeline expects:
 Classification is *order-sensitive* (first match wins): rsID, then the
 unambiguous 4-token coordinate, then CNV, then an HGVS catch-all. The catch-all
 means non-empty garbage is classified as HGVS and left for the upstream recoder
-to reject; only empty/blank input raises here.
+to reject; only empty/blank input and HGVS repeat notation (``[n]``) raise here.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from vep_link.exceptions import VariantParseError
+from vep_link.exceptions import UnsupportedContigError, VariantParseError
 from vep_link.models.enums import InputKind
 
 # Recognised contigs at the parser level. M/MT parse as coordinates; downstream
@@ -35,6 +35,8 @@ _CNV_RE = re.compile(
     re.IGNORECASE,
 )
 _CHR_PREFIX_RE = re.compile(r"^chr", re.IGNORECASE)
+# HGVS repeated-sequence count, e.g. ``GGGGCC[2]`` or ``[(145_?)]``.
+_HGVS_REPEAT_RE = re.compile(r"\[\(?(\d+|\?)(_(\d+|\?))?\)?\]")
 
 # CNV type -> the token VEP's region endpoint expects for a structural variant.
 _CNV_TYPE_TO_VEP = {
@@ -100,9 +102,10 @@ def parse_variant_input(text: str) -> VariantInput:
     """Classify and normalize a raw variant string.
 
     Resolution order (first match wins): rsID -> 4-token coordinate -> CNV ->
-    HGVS catch-all. Raises :class:`VariantParseError` only for empty/blank input
-    (or input that cleans to nothing); any other non-empty string is treated as
-    HGVS for the upstream recoder to validate.
+    HGVS catch-all. Raises :class:`VariantParseError` for empty/blank input
+    (or input that cleans to nothing) and :class:`UnsupportedContigError` for
+    HGVS repeat notation; any other non-empty string is treated as HGVS for the
+    upstream recoder to validate.
     """
     if text is None or not str(text).strip():
         raise VariantParseError(
@@ -139,6 +142,12 @@ def parse_variant_input(text: str) -> VariantInput:
     if not cleaned:
         raise VariantParseError(
             "Input cleaned to an empty string and could not be interpreted as a variant."
+        )
+    if _HGVS_REPEAT_RE.search(cleaned):
+        # Ensembl cannot parse it and only says so after a slow 400 (#115).
+        raise UnsupportedContigError(
+            "HGVS repeated-sequence notation ([n]) is not supported by Ensembl. Describe "
+            "the change as a dup/ins/del, or pass the genomic CHR-POS-REF-ALT."
         )
     return VariantInput(kind=InputKind.HGVS, value=cleaned)
 
