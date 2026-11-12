@@ -151,6 +151,11 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT: int = 30
     CONNECT_TIMEOUT: float = 10.0
     OVERALL_DEADLINE_SECONDS: float = 45.0
+    # Slice of OVERALL_DEADLINE_SECONDS reserved for the VEP-HGVS fallback when the
+    # recoder fails (#111): recoder + fallback never exceed the overall deadline.
+    # BATCH_RECODE_DEADLINE_SECONDS bounds a whole batch's recoding phase (#114).
+    HGVS_FALLBACK_DEADLINE_SECONDS: float = 15.0
+    BATCH_RECODE_DEADLINE_SECONDS: float = 30.0
     MAX_CONCURRENCY: int = 5
     QUEUE_WAIT_TIMEOUT: int = 20
     MAX_RETRIES: int = 2

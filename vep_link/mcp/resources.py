@@ -133,7 +133,7 @@ _RESPONSE_MODES = ["minimal", "compact", "standard", "full"]
 
 # Codes for the top-level ``warnings[]`` channel (honest non-fatal signals that
 # ride alongside a successful result; distinct from the error envelope's codes).
-_WARNING_CODES = ["multiple_alts", "ref_not_validated"]
+_WARNING_CODES = ["multiple_alts", "ref_not_validated", "resolved_via_vep_hgvs"]
 
 _RESOURCES = [
     "vep://capabilities",
@@ -188,7 +188,8 @@ _NOTES = [
         "Allele-correctness contract (v0.2): resolve_variant and annotate_variant "
         "return {query, assembly, variants[], warnings[]} -- a multi-allelic input "
         "(e.g. rs6025) expands to one entry per ALT allele instead of a silent "
-        "single pick, with a multiple_alts warning. Pass the optional allele "
+        "single pick, with a multiple_alts warning (annotate_variants_batch returns "
+        "one result per ALT, each tagged with its input). Pass the optional allele "
         "argument (an ALT base or full CHR-POS-REF-ALT) to filter to one ALT. "
         "liftover_variant validates the lifted reference base against the target "
         "assembly: on a mismatch it returns a coordinate-only lifted value plus a "

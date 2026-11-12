@@ -26,6 +26,7 @@ single VEP request, and results are fanned back out to every original input.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from vep_link.api.ensembl_client import EnsemblClient
@@ -33,8 +34,10 @@ from vep_link.config import Settings
 from vep_link.exceptions import (
     AmbiguousMappingError,
     DataNotFoundError,
+    EnsemblApiError,
     UnsupportedContigError,
     UpstreamInputError,
+    UpstreamTimeoutError,
     VepLinkError,
 )
 from vep_link.mcp._sanitize import sanitize_message
@@ -44,12 +47,17 @@ from vep_link.observability.telemetry import telemetry_cache
 from vep_link.services._recoding import (
     aggregate_recode_entry,
     canonical_vcf_strings,
-    first_canonical_vcf_string,
     project_recode_fields,
+    vep_vcf_strings,
 )
 from vep_link.services.extraction import build_annotation
-from vep_link.services.warnings import multiple_alts_warning, ref_not_validated_warning
+from vep_link.services.warnings import (
+    multiple_alts_warning,
+    ref_not_validated_warning,
+    resolved_via_vep_hgvs_warning,
+)
 from vep_link.variant import (
+    VariantInput,
     cnv_to_vep_line,
     coordinate_to_vep_line,
     needs_recoding,
@@ -62,6 +70,18 @@ from vep_link.variant import (
 # identically (a duplicated table is a fix-narrower-than-class trap: an earlier
 # copy silently omitted DisallowedURLError / ResponseTooLargeError). See
 # canonical_error_code and the shared _EXCEPTION_MAP.
+
+
+# Fixed (no variant echo): both Ensembl HGVS resolvers failed; name a usable way out.
+_BOTH_HGVS_PATHS_FAILED = (
+    "Ensembl Variant Recoder and VEP's HGVS endpoint both failed for this HGVS. "
+    "Retry shortly, or resolve it to coordinates elsewhere (in GeneFoundry: "
+    "clinvar_get_variant with the HGVS as identifier) and pass CHR-POS-REF-ALT."
+)
+
+_BATCH_DEADLINE_MESSAGE = (
+    "Batch deadline reached before this input was resolved; retry it alone or in a smaller batch."
+)
 
 
 def _allele_matches(canonical: str, allele: str) -> bool:
@@ -106,37 +126,39 @@ class VepService:
 
     # -- canonicalization --------------------------------------------------
 
-    async def _to_canonical(self, variant: str, build: GenomeBuild) -> tuple[str, str]:
-        """Resolve a raw input to ``(canonical_id, vep_line)``.
+    async def _recode(self, vi: VariantInput, build: GenomeBuild) -> tuple[list[str], list[dict]]:
+        """Recode an rsID/HGVS to its canonical alts, plus any resolution-path warning.
 
-        Coordinates and CNVs are already VEP-ready and skip the recoder. HGVS
-        and rsID inputs are sent to the Variant Recoder; the first canonical
-        ``CHR-POS-REF-ALT`` ``vcf_string`` becomes the canonical id. Raises
-        :class:`VariantParseError` for unparseable input and
-        :class:`DataNotFoundError` when the recoder yields no genomic
-        coordinate.
+        When the Variant Recoder fails upstream for an HGVS input, VEP's own HGVS
+        endpoint is tried before giving up (#111); the path is named in a warning.
         """
-        vi = parse_variant_input(variant)
-
-        if vi.kind is InputKind.COORDINATE:
-            return vi.value, coordinate_to_vep_line(vi.value)
-        if vi.kind is InputKind.CNV:
-            return vi.value, cnv_to_vep_line(vi.value)
-
-        if needs_recoding(vi):
-            payload = await self._client.recoder_get(vi.value, build)
-            canonical = first_canonical_vcf_string(payload)
-            if canonical is None:
-                raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
-            return canonical, coordinate_to_vep_line(canonical)
-
-        # Defensive: parse_variant_input only emits the four kinds above.
-        raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
+        if vi.kind is not InputKind.HGVS:
+            return canonical_vcf_strings(await self._client.recoder_get(vi.value, build)), []
+        # Recoder + fallback share ONE overall budget, so a call never outlasts a
+        # plain recoder call (45 s); the fallback keeps at least its reserved slice.
+        loop = asyncio.get_running_loop()
+        budget_end = loop.time() + self._settings.OVERALL_DEADLINE_SECONDS
+        reserve = self._settings.HGVS_FALLBACK_DEADLINE_SECONDS
+        try:
+            payload = await self._client.recoder_get(
+                vi.value, build, deadline=self._settings.OVERALL_DEADLINE_SECONDS - reserve
+            )
+        except (EnsemblApiError, UpstreamTimeoutError) as exc:
+            remaining = max(reserve, budget_end - loop.time())
+            try:
+                payload = await self._client.vep_hgvs_vcf(vi.value, build, deadline=remaining)
+                alts = vep_vcf_strings(payload)
+            except EnsemblApiError, UpstreamTimeoutError:
+                raise type(exc)(_BOTH_HGVS_PATHS_FAILED) from exc
+            if not alts:
+                raise
+            return alts, [resolved_via_vep_hgvs_warning()]
+        return canonical_vcf_strings(payload), []
 
     async def _canonical_lines(
         self, variant: str, build: GenomeBuild, allele: str | None
-    ) -> list[tuple[str, str]]:
-        """All ``(canonical_id, vep_line)`` pairs for an input.
+    ) -> tuple[list[tuple[str, str]], list[dict]]:
+        """All ``(canonical_id, vep_line)`` pairs for an input, plus path warnings.
 
         Coordinates/CNVs yield exactly one pair. A recoded rsID/HGVS yields one
         pair *per distinct ALT allele* (deterministically sorted), so a
@@ -146,13 +168,13 @@ class VepService:
         resolves (or nothing matches ``allele``).
         """
         vi = parse_variant_input(variant)
+        path_warnings: list[dict] = []
         if vi.kind is InputKind.COORDINATE:
             pairs = [(vi.value, coordinate_to_vep_line(vi.value))]
         elif vi.kind is InputKind.CNV:
             pairs = [(vi.value, cnv_to_vep_line(vi.value))]
         elif needs_recoding(vi):
-            payload = await self._client.recoder_get(vi.value, build)
-            canonicals = canonical_vcf_strings(payload)
+            canonicals, path_warnings = await self._recode(vi, build)
             if not canonicals:
                 raise DataNotFoundError(f"Could not resolve {variant!r} to a genomic coordinate")
             pairs = [(c, coordinate_to_vep_line(c)) for c in canonicals]
@@ -163,7 +185,7 @@ class VepService:
             pairs = [pair for pair in pairs if _allele_matches(pair[0], allele)]
             if not pairs:
                 raise DataNotFoundError(f"No ALT allele matching {allele!r} for {variant!r}")
-        return pairs
+        return pairs, path_warnings
 
     # -- resolve -----------------------------------------------------------
 
@@ -173,7 +195,7 @@ class VepService:
 
     async def _resolve_impl(self, variant: str, build_value: str, allele: str | None) -> dict:
         build = GenomeBuild(build_value)
-        pairs = await self._canonical_lines(variant, build, allele)
+        pairs, path_warnings = await self._canonical_lines(variant, build, allele)
         records = await self._client.vep_region_post([line for _, line in pairs], build)
         by_line: dict[str, dict] = {
             line: rec for rec in records if isinstance((line := rec.get("input")), str)
@@ -198,7 +220,7 @@ class VepService:
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs),
+            "warnings": _alt_warnings(pairs) + path_warnings,
         }
 
     # -- annotate ----------------------------------------------------------
@@ -221,7 +243,7 @@ class VepService:
         build = GenomeBuild(build_value)
         parsed: dict[str, str] = json.loads(options_key)
         options = parsed or None
-        pairs = await self._canonical_lines(variant, build, allele)
+        pairs, path_warnings = await self._canonical_lines(variant, build, allele)
         records = await self._client.vep_region_post(
             [line for _, line in pairs], build, options=options
         )
@@ -239,7 +261,7 @@ class VepService:
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs),
+            "warnings": _alt_warnings(pairs) + path_warnings,
         }
 
     # -- annotate_batch ----------------------------------------------------
@@ -254,7 +276,9 @@ class VepService:
         """Annotate many variants; collect per-input errors, never fail wholesale.
 
         Identical canonical variants are de-duplicated into a single VEP region
-        POST and the resulting record is fanned out to every original input.
+        POST and the resulting record is fanned out to every original input. A
+        multi-allelic input yields one result row per ALT allele;
+        ``summary.annotated`` counts inputs, not rows.
         Returns ``{"results", "errors", "summary"}``.
         """
         requested = len(variants)
@@ -268,34 +292,64 @@ class VepService:
         canonical_to_inputs: dict[str, list[str]] = {}
         # canonical id -> its VEP region line.
         canonical_to_line: dict[str, str] = {}
+        resolved: list[str] = []
 
-        for original in variants:
-            try:
-                canonical, vep_line = await self._to_canonical(original, build)
-            except VepLinkError as exc:
+        # Recode concurrently (bounded to the client's own slot count so no task
+        # trips its queue-wait) under one deadline that leaves room for the VEP
+        # POST inside the router's 120 s (#114).
+        slots = asyncio.Semaphore(max(1, self._settings.MAX_CONCURRENCY))
+
+        async def all_pairs(original: str) -> list[tuple[str, str]]:
+            async with slots:
+                pairs, _ = await self._canonical_lines(original, build, None)
+            return pairs
+
+        tasks = [asyncio.create_task(all_pairs(original)) for original in variants]
+        try:
+            _done, pending = (
+                await asyncio.wait(tasks, timeout=self._settings.BATCH_RECODE_DEADLINE_SECONDS)
+                if tasks
+                else (set(), set())
+            )
+        finally:  # deadline hit or caller cancelled: never leave recodes running
+            for task in tasks:
+                task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+        for original, task in zip(variants, tasks, strict=True):
+            exc = (
+                UpstreamTimeoutError(_BATCH_DEADLINE_MESSAGE)
+                if task in pending
+                else task.exception()
+            )
+            if isinstance(exc, VepLinkError):
                 # Any known fault (parse, not-found, rate-limit, upstream, URL-guard
                 # / response-cap refusal) is collected per-input with the SAME
                 # canonical code + subcode the single-call boundary uses; never
                 # abort the batch.
                 code, subcode = canonical_error_code(exc)
                 errors.append(self._batch_error(original, code, exc, subcode=subcode))
-                continue
-            except Exception as exc:  # last-resort: one bad input cannot crash the batch
+            elif exc is not None:  # last-resort: one bad input cannot crash the batch
                 errors.append(self._batch_error(original, "internal", exc))
-                continue
-            canonical_to_inputs.setdefault(canonical, []).append(original)
-            canonical_to_line[canonical] = vep_line
+            else:
+                resolved.append(original)
+                # A multi-allelic input yields one result per ALT, never a silent pick.
+                for canonical, vep_line in task.result():
+                    canonical_to_inputs.setdefault(canonical, []).append(original)
+                    canonical_to_line[canonical] = vep_line
 
         results = await self._annotate_unique(
             canonical_to_inputs, canonical_to_line, build, vep_options
         )
+        annotated_inputs = {row["input"] for row in results}
 
         return {
             "results": results,
             "errors": errors,
             "summary": {
                 "requested": requested,
-                "annotated": len(results),
+                # Inputs (not ALT rows) that got at least one annotation.
+                "annotated": sum(1 for v in resolved if v in annotated_inputs),
                 "failed": len(errors),
             },
         }
@@ -339,7 +393,7 @@ class VepService:
 
     @staticmethod
     def _batch_error(
-        original: str, code: str, exc: Exception, *, subcode: str | None = None
+        original: str, code: str, exc: BaseException, *, subcode: str | None = None
     ) -> dict:
         """Shape a per-input batch failure record.
 

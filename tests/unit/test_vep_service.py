@@ -10,6 +10,8 @@ prevents a second identical call from hitting the client again.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from copy import deepcopy
 from typing import Any
 
@@ -31,6 +33,7 @@ from vep_link.exceptions import (
     RateLimitedError,
     UnsupportedContigError,
     UpstreamInputError,
+    UpstreamTimeoutError,
 )
 from vep_link.models.enums import GenomeBuild
 from vep_link.services import VepService
@@ -70,12 +73,23 @@ class FakeEnsemblClient:
         self.assembly_map_calls: list[dict[str, Any]] = []
         self.sequence_region_ref_calls: list[dict[str, Any]] = []
 
+        self.vep_hgvs_vcf_return: Any = []
+        self.vep_hgvs_vcf_error: Exception | None = None
+        self.vep_hgvs_vcf_calls: list[str] = []
+
         self.closed = False
 
     async def recoder_get(
-        self, variant: str, build: GenomeBuild, *, fields: str = "vcf_string"
+        self,
+        variant: str,
+        build: GenomeBuild,
+        *,
+        fields: str = "vcf_string",
+        deadline: float | None = None,
     ) -> Any:
-        self.recoder_get_calls.append({"variant": variant, "build": build, "fields": fields})
+        self.recoder_get_calls.append(
+            {"variant": variant, "build": build, "fields": fields, "deadline": deadline}
+        )
         if self.recoder_get_error:
             raise self.recoder_get_error
         return self.recoder_get_return
@@ -101,6 +115,13 @@ class FakeEnsemblClient:
         if self.vep_region_post_error:
             raise self.vep_region_post_error
         return self.vep_region_post_return
+
+    async def vep_hgvs_vcf(self, hgvs: str, build: GenomeBuild, *, deadline: float) -> Any:
+        self.vep_hgvs_vcf_calls.append(hgvs)
+        self.vep_hgvs_vcf_deadline = deadline
+        if self.vep_hgvs_vcf_error:
+            raise self.vep_hgvs_vcf_error
+        return self.vep_hgvs_vcf_return
 
     async def assembly_map(
         self, region: str, from_build: GenomeBuild, to_build: GenomeBuild
@@ -562,3 +583,115 @@ async def test_cache_distinguishes_options(service: VepService, client: FakeEnse
 async def test_aclose_closes_client(service: VepService, client: FakeEnsemblClient) -> None:
     await service.aclose()
     assert client.closed is True
+
+
+# --- HGVS recoder fallback (#111) ------------------------------------------
+
+
+async def test_hgvs_resolves_via_vep_when_recoder_unreachable(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_return = [{"input": "NM_006576.4:c.1273C>A", "vcf_string": "1-1000-A-T"}]
+    result = await service.resolve("NM_006576.4:c.1273C>A", GRCH38)
+    assert client.vep_hgvs_vcf_calls == ["NM_006576.4:c.1273C>A"]
+    assert result["variants"][0]["variant_id"] == "1-1000-A-T"
+    assert [w["code"] for w in result["warnings"]] == ["resolved_via_vep_hgvs"]
+
+
+async def test_rsid_recoder_failure_does_not_use_hgvs_fallback(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_error = EnsemblApiError("recoder 500")
+    with pytest.raises(EnsemblApiError):
+        await service.resolve("rs6025", GRCH38)
+    assert client.vep_hgvs_vcf_calls == []
+
+
+async def test_both_hgvs_paths_failing_names_a_usable_fallback(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_error = EnsemblApiError("vep 503")
+    with pytest.raises(UpstreamTimeoutError, match="clinvar_get_variant"):
+        await service.annotate("NM_006576.4:c.1273C>A", GRCH38)
+
+
+async def test_hgvs_fallback_input_error_is_surfaced(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # VEP can say *why* the HGVS is wrong even when the recoder only timed out.
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_error = UpstreamInputError("unknown transcript version")
+    with pytest.raises(UpstreamInputError):
+        await service.resolve("NM_001256054.2:c.-45+163G>A", GRCH38)
+
+
+# --- batch concurrency + deadline (#114) -----------------------------------
+
+
+async def test_batch_of_200_slow_recodes_returns_partial_results_within_deadline(
+    settings: Settings, client: FakeEnsemblClient
+) -> None:
+    fast = settings.model_copy(update={"BATCH_RECODE_DEADLINE_SECONDS": 0.5})
+    svc = VepService(client, fast)  # type: ignore[arg-type]
+    client.recoder_get_return = [{"input": "x", "A": {"vcf_string": ["1-1000-A-T"]}}]
+    in_flight = peak = 0
+
+    async def slow_recoder(variant: str, build: GenomeBuild, **_: Any) -> Any:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        try:
+            # Most inputs answer in 10 ms; every 10th hangs like a stalled recoder.
+            await asyncio.sleep(30 if int(variant[2:]) % 10 == 0 else 0.01)
+        finally:
+            in_flight -= 1
+        return client.recoder_get_return
+
+    client.recoder_get = slow_recoder  # type: ignore[method-assign]
+    inputs = [f"rs{i}" for i in range(1, 201)]
+    start = time.perf_counter()
+    result = await svc.annotate_batch(inputs, GRCH38)
+    assert time.perf_counter() - start < 2.0
+    assert result["summary"]["requested"] == 200
+    assert result["summary"]["annotated"] > 0
+    assert result["summary"]["annotated"] + result["summary"]["failed"] == 200
+    late = [e for e in result["errors"] if e.get("error_subcode") == "upstream_timeout"]
+    assert late and all(e["error_code"] == "upstream_unavailable" for e in late)
+    assert 1 < peak <= fast.MAX_CONCURRENCY
+    assert in_flight == 0  # nothing left running after the deadline
+
+
+async def test_annotate_batch_expands_multi_allelic_input_to_every_alt(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # rs6025 has two ALTs; the batch must not silently keep only the first.
+    client.recoder_get_return = [
+        {
+            "input": "rs6025",
+            "A": {"vcf_string": ["1-1000-A-C"]},
+            "T": {"vcf_string": ["1-1000-A-T"]},
+        }
+    ]
+    client.vep_region_post_return = [
+        _vep_record("1 1000 . A C . . ."),
+        _vep_record("1 1000 . A T . . ."),
+    ]
+    result = await service.annotate_batch(["rs6025", "1-1000-A-T"], GRCH38)
+    rs_rows = [r["variant_id"] for r in result["results"] if r["input"] == "rs6025"]
+    assert rs_rows == ["1-1000-A-C", "1-1000-A-T"]
+    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0}
+
+
+async def test_hgvs_recoder_plus_fallback_stay_within_one_overall_deadline(
+    service: VepService, client: FakeEnsemblClient, settings: Settings
+) -> None:
+    """A single call must not stack the fallback on top of the recoder budget (probe: 60 s)."""
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_return = [{"vcf_string": "1-1000-A-T"}]
+    await service.resolve("NM_006576.4:c.1273C>A", GRCH38)
+    overall, reserve = settings.OVERALL_DEADLINE_SECONDS, settings.HGVS_FALLBACK_DEADLINE_SECONDS
+    # The recoder leaves the reserve free; the fallback gets only what is left of ONE budget.
+    assert client.recoder_get_calls[0]["deadline"] == overall - reserve
+    assert reserve <= client.vep_hgvs_vcf_deadline <= overall

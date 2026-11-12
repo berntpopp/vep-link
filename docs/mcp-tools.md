@@ -84,7 +84,7 @@ every `_meta` and skips re-fetching when unchanged.
   "error_subcodes": [
     "unsupported_input", "build_mismatch", "upstream_timeout", "output_validation_failed"
   ],
-  "warning_codes": ["multiple_alts", "ref_not_validated"],
+  "warning_codes": ["multiple_alts", "ref_not_validated", "resolved_via_vep_hgvs"],
   "vep_default_options": {"CADD": "1", "REVEL": "1", "AlphaMissense": "1", "Conservation": "1", "hgvs": "1", "mane": "1", "numbers": "1", "canonical": "1", "domains": "1"},
   "vep_option_allowlist": ["AlphaMissense", "CADD", "Conservation", "EVE", "REVEL", "SpliceAI", "dbNSFP", "..."],
   "batch_max": 200,

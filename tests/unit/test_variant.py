@@ -12,7 +12,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from vep_link.exceptions import VariantParseError
+from vep_link.exceptions import UnsupportedContigError, VariantParseError
 from vep_link.models.enums import InputKind
 from vep_link.variant import (
     VariantInput,
@@ -261,3 +261,17 @@ def test_variant_input_is_frozen() -> None:
     vi = VariantInput(InputKind.RSID, "rs1")
     with pytest.raises(FrozenInstanceError):
         vi.value = "rs2"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "NM_001256054.2:c.-45+163GGGGCC[2]",
+        "NM_001256054.2:c.-45+163_-45+168[(145_?)]",
+        "NC_000009.12:g.27573529GGCCCC[3]",
+    ],
+)
+def test_hgvs_repeat_notation_rejected_fast(text: str) -> None:
+    """#115: Ensembl cannot parse repeated-sequence [n]; fail locally, not after a 20 s 400."""
+    with pytest.raises(UnsupportedContigError, match="repeat"):
+        parse_variant_input(text)

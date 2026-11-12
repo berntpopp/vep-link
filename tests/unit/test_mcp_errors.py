@@ -459,3 +459,27 @@ async def test_install_validation_error_handler_returns_flat_iserror_tool_result
     assert env["success"] is False
     assert env["error_code"] == "invalid_input"
     assert env["_meta"]["unsafe_for_clinical_use"] is True
+
+
+async def test_run_mcp_tool_caps_wall_clock_with_retryable_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recode + VEP POST chain can exceed a client's 60 s; answer with a retryable error first."""
+    import asyncio
+    import time
+
+    import vep_link.mcp.errors as errors_mod
+
+    monkeypatch.setattr(errors_mod, "TOOL_DEADLINE_SECONDS", 0.2)
+
+    async def body() -> dict[str, Any]:
+        await asyncio.sleep(30)
+        return {}
+
+    start = time.perf_counter()
+    result = await run_mcp_tool("annotate_variant", body, _ctx())
+    assert time.perf_counter() - start < 2
+    env = _envelope(result)
+    assert env["error_code"] == "upstream_unavailable"
+    assert env["error_subcode"] == "upstream_timeout"
+    assert env["retryable"] is True

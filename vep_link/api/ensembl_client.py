@@ -98,14 +98,20 @@ class EnsemblClient:
     # -- Variant Recoder ---------------------------------------------------
 
     async def recoder_get(
-        self, variant: str, build: GenomeBuild, *, fields: str = "vcf_string"
+        self,
+        variant: str,
+        build: GenomeBuild,
+        *,
+        fields: str = "vcf_string",
+        deadline: float | None = None,
     ) -> Any:
         """GET recoded info for a single variant (rsID / HGVS / VCF string).
 
-        Ensembl returns a JSON list; it is passed through unchanged.
+        Ensembl returns a JSON list; it is passed through unchanged. ``deadline``
+        overrides the overall budget (HGVS reserves part of it for the fallback).
         """
         url = f"{self._settings.recoder_url(build)}{RECODER_GET_PATH}/{quote(variant, safe='')}"
-        return await self._http.get_json(url, _fields_to_params(fields))
+        return await self._http.get_json(url, _fields_to_params(fields), deadline=deadline)
 
     async def recoder_post(
         self, ids: list[str], build: GenomeBuild, *, fields: str = "vcf_string"
@@ -134,6 +140,14 @@ class EnsemblClient:
         url = f"{self._settings.vep_url(build)}{VEP_HGVS_PATH}/{quote(hgvs, safe='')}"
         result: list[dict] = await self._http.get_json(url, _vep_params(options))
         return result
+
+    async def vep_hgvs_vcf(self, hgvs: str, build: GenomeBuild, *, deadline: float) -> Any:
+        """Resolve HGVS to ``CHR-POS-REF-ALT`` via VEP's own HGVS parser (recoder fallback).
+
+        Lean options only (no plugins), within the ``deadline`` the recoder left over.
+        """
+        url = f"{self._settings.vep_url(build)}{VEP_HGVS_PATH}/{quote(hgvs, safe='')}"
+        return await self._http.get_json(url, {"vcf_string": "1", "pick": "1"}, deadline=deadline)
 
     async def vep_id_get(
         self, rsid: str, build: GenomeBuild, *, options: dict[str, str] | None = None

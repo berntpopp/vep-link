@@ -46,6 +46,7 @@ FastMCP argument-validation failures are converted to the same flat
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -114,6 +115,14 @@ _FALLBACK_TOOL = "get_capabilities"
 # off and retry (or switch assembly), not reformulate its input. These also feed
 # the circuit breaker's failure count.
 _RETRYABLE_CODES: frozenset[str] = frozenset({"rate_limited", "upstream_unavailable"})
+# Wall-clock cap on one tool call. A recode (45 s) + VEP POST (45 s) chain could
+# outlast a client's ~60 s read timeout and return nothing; answer with a
+# retryable upstream_timeout instead. ponytail: module constant, not a Setting --
+# promote it if operators ever need to tune it alongside OVERALL_DEADLINE_SECONDS.
+TOOL_DEADLINE_SECONDS = 55.0
+_TOOL_DEADLINE_MESSAGE = (
+    "Ensembl did not answer within this server's per-call deadline; retry shortly."
+)
 # Default backoff hint surfaced as the top-level ``retry_after_s`` for retryable faults.
 _DEFAULT_RETRY_AFTER_S = 10
 
@@ -423,7 +432,11 @@ async def run_mcp_tool(
     # mutable upstream accumulator -- reset installs a fresh one per request).
     reset_telemetry()
     try:
-        result = await body()
+        try:
+            async with asyncio.timeout(TOOL_DEADLINE_SECONDS):
+                result = await body()
+        except TimeoutError as exc:
+            raise UpstreamTimeoutError(_TOOL_DEADLINE_MESSAGE) from exc
     except VepLinkError as exc:
         classified = _classify(exc)
         if classified is None:

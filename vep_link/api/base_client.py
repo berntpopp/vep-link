@@ -8,7 +8,9 @@ request runs through a jittered exponential-backoff retry loop that:
 - retries transient transport faults and ``{429, 500, 502, 503, 504}`` statuses;
 - honors ``Retry-After`` (integer seconds *or* HTTP-date) on 429s, waiting at
   least that long;
-- fails fast (no retry) on deterministic input errors ``{400, 404, 410, 422}``;
+- fails fast (no retry) on deterministic input errors ``{400, 404, 410, 422}``,
+  except a 400 that carries no Ensembl ``{"error": ...}`` body, which is an
+  upstream flake (retried, then ``upstream_unavailable``);
 - maps every terminal outcome onto the vep-link exception taxonomy so the MCP
   error layer can classify deterministically.
 
@@ -52,6 +54,30 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 # Deterministic client errors: the request shape is wrong and will never succeed.
 _INPUT_ERROR_STATUS = frozenset({400, 404, 410, 422})
+# Bounded read of a 400 body: matched against fixed patterns only, never surfaced.
+_MAX_400_BODY_BYTES = 64 * 1024
+# (substring of Ensembl's 400 ``error`` text, fixed caller-facing message).
+_KNOWN_400_MESSAGES: tuple[tuple[str, str], ...] = (
+    (
+        "Could not get a Transcript object",
+        "Ensembl does not know this transcript accession/version (Ensembl usually "
+        "carries only the current RefSeq version). Retry with the current transcript "
+        "version, a genomic HGVS (NC_...:g.), or CHR-POS-REF-ALT.",
+    ),
+    (
+        "does not match reference allele",
+        "The reference allele in the input does not match the reference sequence at "
+        "that position; check REF and the assembly.",
+    ),
+    (
+        "No variant found with ID",
+        "Ensembl found no variant for this identifier; check the rsID/HGVS spelling.",
+    ),
+)
+
+
+class _TransientBadRequestError(httpx.TransportError):
+    """A 400 without Ensembl's JSON error body: an upstream flake, retried (#51)."""
 
 
 class BaseHTTPClient:
@@ -143,13 +169,17 @@ class BaseHTTPClient:
         params: dict[str, Any] | None = None,
         *,
         headers: dict[str, str] | None = None,
+        deadline: float | None = None,
     ) -> Any:
-        """GET ``url`` with ``params``, returning parsed JSON (dict or list)."""
+        """GET ``url`` with ``params``, returning parsed JSON (dict or list).
+
+        ``deadline`` overrides ``OVERALL_DEADLINE_SECONDS`` for this call.
+        """
 
         def _send(client: httpx.AsyncClient, timeout: httpx.Timeout) -> Any:
             return client.stream("GET", url, params=params, headers=headers, timeout=timeout)
 
-        return await self._request(url, _send)
+        return await self._request(url, _send, deadline)
 
     async def post_json(
         self,
@@ -179,15 +209,23 @@ class BaseHTTPClient:
         Reads status/headers FIRST: on a ``>=400`` status it calls
         ``raise_for_status`` WITHOUT reading the body (so the caller's fixed,
         body-free ``_safe_upstream_input_message`` handles it and no upstream
-        prose is surfaced). On success it accumulates ``aiter_bytes`` -- httpx
-        auto-decompresses gzip, so the running total bounds *decoded* bytes --
-        and raises :class:`ResponseTooLargeError` (NON-RETRYABLE) the instant the
+        prose is surfaced). A 400 alone gets a bounded body read, matched only
+        against fixed patterns to pick a fixed message (never echoed). On
+        success it accumulates ``aiter_bytes`` -- httpx auto-decompresses
+        gzip, so the running total bounds *decoded* bytes -- and raises :class:`ResponseTooLargeError` (NON-RETRYABLE) the instant the
         total exceeds the cap, failing closed rather than truncating. The URL
         guard runs as the client's request event-hook, so a disallowed hop raises
         ``DisallowedURLError`` here at connect time; neither guard exception is an
         ``httpx`` fault, so :meth:`_request` never retries it.
         """
         async with send(client, timeout) as response:
+            if response.status_code == 400:
+                detail = await _ensembl_error_text(response)
+                if detail is None:
+                    raise _TransientBadRequestError(
+                        "Upstream returned HTTP 400 without an error explanation (transient)."
+                    )
+                raise UpstreamInputError(_input_error_message(detail))
             if response.status_code >= 400:
                 response.raise_for_status()
             total = 0
@@ -206,6 +244,7 @@ class BaseHTTPClient:
         self,
         url: str,
         send: Any,
+        deadline: float | None = None,
     ) -> Any:
         """Run ``send`` through the bounded-concurrency, jittered-retry loop.
 
@@ -218,7 +257,9 @@ class BaseHTTPClient:
         """
         client = await self._ensure_client()
         loop = asyncio.get_running_loop()
-        op_deadline = loop.time() + self._settings.OVERALL_DEADLINE_SECONDS
+        op_deadline = loop.time() + (
+            self._settings.OVERALL_DEADLINE_SECONDS if deadline is None else deadline
+        )
         max_retries = self._settings.MAX_RETRIES
         last_exc: BaseException | None = None
 
@@ -326,6 +367,29 @@ def _parse_retry_after(value: str | None) -> float | None:
         when = when.replace(tzinfo=UTC)
     delta = (when - datetime.now(UTC)).total_seconds()
     return max(0.0, delta)
+
+
+async def _ensembl_error_text(response: httpx.Response) -> str | None:
+    """Ensembl's ``{"error": str}`` text from a bounded 400 body read, else ``None``."""
+    raw = b""
+    async for chunk in response.aiter_bytes():
+        raw += chunk
+        if len(raw) > _MAX_400_BODY_BYTES:
+            return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    return error if isinstance(error, str) and error else None
+
+
+def _input_error_message(detail: str) -> str:
+    """Fixed message for a real Ensembl 400; ``detail`` is matched, NEVER echoed."""
+    for needle, message in _KNOWN_400_MESSAGES:
+        if needle in detail:
+            return message
+    return _safe_upstream_input_message(400)
 
 
 def _safe_upstream_input_message(status: int) -> str:

@@ -37,6 +37,16 @@ def _allele_objects(entry: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def vep_vcf_strings(payload: Any) -> list[str]:
+    """Distinct sorted canonical ``vcf_string`` values from a VEP HGVS GET reply."""
+    found = {
+        rec.get("vcf_string")
+        for rec in (payload if isinstance(payload, list) else [])
+        if isinstance(rec, dict)
+    }
+    return sorted(v for v in found if isinstance(v, str) and _VCF_STRING_RE.match(v))
+
+
 def canonical_vcf_strings(payload: Any) -> list[str]:
     """All distinct canonical ``CHR-POS-REF-ALT`` strings in a recoder GET reply.
 
@@ -56,16 +66,6 @@ def canonical_vcf_strings(payload: Any) -> list[str]:
                     if isinstance(candidate, str) and _VCF_STRING_RE.match(candidate):
                         found.add(candidate)
     return sorted(found)
-
-
-def first_canonical_vcf_string(payload: Any) -> str | None:
-    """First canonical alt of a recoder reply (deterministic); ``None`` if none.
-
-    Delegates to :func:`canonical_vcf_strings` and returns its first element, so
-    the single-alt callers (batch canonicalization) pick a stable, sorted alt.
-    """
-    alts = canonical_vcf_strings(payload)
-    return alts[0] if alts else None
 
 
 def aggregate_recode_entry(
