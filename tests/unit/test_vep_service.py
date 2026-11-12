@@ -80,9 +80,16 @@ class FakeEnsemblClient:
         self.closed = False
 
     async def recoder_get(
-        self, variant: str, build: GenomeBuild, *, fields: str = "vcf_string"
+        self,
+        variant: str,
+        build: GenomeBuild,
+        *,
+        fields: str = "vcf_string",
+        deadline: float | None = None,
     ) -> Any:
-        self.recoder_get_calls.append({"variant": variant, "build": build, "fields": fields})
+        self.recoder_get_calls.append(
+            {"variant": variant, "build": build, "fields": fields, "deadline": deadline}
+        )
         if self.recoder_get_error:
             raise self.recoder_get_error
         return self.recoder_get_return
@@ -109,8 +116,9 @@ class FakeEnsemblClient:
             raise self.vep_region_post_error
         return self.vep_region_post_return
 
-    async def vep_hgvs_vcf(self, hgvs: str, build: GenomeBuild) -> Any:
+    async def vep_hgvs_vcf(self, hgvs: str, build: GenomeBuild, *, deadline: float) -> Any:
         self.vep_hgvs_vcf_calls.append(hgvs)
+        self.vep_hgvs_vcf_deadline = deadline
         if self.vep_hgvs_vcf_error:
             raise self.vep_hgvs_vcf_error
         return self.vep_hgvs_vcf_return
@@ -630,7 +638,7 @@ async def test_batch_of_200_slow_recodes_returns_partial_results_within_deadline
     client.recoder_get_return = [{"input": "x", "A": {"vcf_string": ["1-1000-A-T"]}}]
     in_flight = peak = 0
 
-    async def slow_recoder(variant: str, build: GenomeBuild, *, fields: str = "") -> Any:
+    async def slow_recoder(variant: str, build: GenomeBuild, **_: Any) -> Any:
         nonlocal in_flight, peak
         in_flight += 1
         peak = max(peak, in_flight)
@@ -674,3 +682,16 @@ async def test_annotate_batch_expands_multi_allelic_input_to_every_alt(
     rs_rows = [r["variant_id"] for r in result["results"] if r["input"] == "rs6025"]
     assert rs_rows == ["1-1000-A-C", "1-1000-A-T"]
     assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0}
+
+
+async def test_hgvs_recoder_plus_fallback_stay_within_one_overall_deadline(
+    service: VepService, client: FakeEnsemblClient, settings: Settings
+) -> None:
+    """A single call must not stack the fallback on top of the recoder budget (probe: 60 s)."""
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_return = [{"vcf_string": "1-1000-A-T"}]
+    await service.resolve("NM_006576.4:c.1273C>A", GRCH38)
+    overall, reserve = settings.OVERALL_DEADLINE_SECONDS, settings.HGVS_FALLBACK_DEADLINE_SECONDS
+    # The recoder leaves the reserve free; the fallback gets only what is left of ONE budget.
+    assert client.recoder_get_calls[0]["deadline"] == overall - reserve
+    assert reserve <= client.vep_hgvs_vcf_deadline <= overall

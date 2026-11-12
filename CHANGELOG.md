@@ -19,9 +19,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - When the Variant Recoder fails upstream for an HGVS input, it is resolved through VEP's own HGVS
   endpoint and the path is named with a `resolved_via_vep_hgvs` warning; if both fail, the error names
   `clinvar_get_variant` as a way out (#111).
-- `annotate_variants_batch` recodes with bounded concurrency under a 60 s deadline
+- `annotate_variants_batch` recodes with bounded concurrency under a 30 s deadline
   (`BATCH_RECODE_DEADLINE_SECONDS`); unreached inputs become per-input `upstream_unavailable` errors and
   finished results are returned, so a batch no longer overruns the router's 120 s (#114).
+- Every tool call is capped at 55 s wall-clock (below a client's typical 60 s read timeout): a slow
+  recode + VEP chain now returns a retryable `upstream_unavailable` / `upstream_timeout` instead of
+  hanging. The HGVS fallback shares the single 45 s upstream budget with the recoder.
 - `annotate_variants_batch` returns one result per ALT allele for a multi-allelic input (rs6025 no longer
   silently drops Factor V Leiden).
 

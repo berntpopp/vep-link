@@ -264,7 +264,7 @@ async def test_vep_hgvs_vcf_sends_lean_options_only(client: EnsemblClient) -> No
         return_value=httpx.Response(200, json=[{"vcf_string": "12-57807649-G-T"}])
     )
     try:
-        result = await client.vep_hgvs_vcf("NM_006576.4:c.1273C>A", GenomeBuild.GRCH38)
+        result = await client.vep_hgvs_vcf("NM_006576.4:c.1273C>A", GenomeBuild.GRCH38, deadline=15)
     finally:
         await client.aclose()
 

@@ -132,13 +132,22 @@ class VepService:
         When the Variant Recoder fails upstream for an HGVS input, VEP's own HGVS
         endpoint is tried before giving up (#111); the path is named in a warning.
         """
+        if vi.kind is not InputKind.HGVS:
+            return canonical_vcf_strings(await self._client.recoder_get(vi.value, build)), []
+        # Recoder + fallback share ONE overall budget, so a call never outlasts a
+        # plain recoder call (45 s); the fallback keeps at least its reserved slice.
+        loop = asyncio.get_running_loop()
+        budget_end = loop.time() + self._settings.OVERALL_DEADLINE_SECONDS
+        reserve = self._settings.HGVS_FALLBACK_DEADLINE_SECONDS
         try:
-            payload = await self._client.recoder_get(vi.value, build)
+            payload = await self._client.recoder_get(
+                vi.value, build, deadline=self._settings.OVERALL_DEADLINE_SECONDS - reserve
+            )
         except (EnsemblApiError, UpstreamTimeoutError) as exc:
-            if vi.kind is not InputKind.HGVS:
-                raise
+            remaining = max(reserve, budget_end - loop.time())
             try:
-                alts = vep_vcf_strings(await self._client.vep_hgvs_vcf(vi.value, build))
+                payload = await self._client.vep_hgvs_vcf(vi.value, build, deadline=remaining)
+                alts = vep_vcf_strings(payload)
             except EnsemblApiError, UpstreamTimeoutError:
                 raise type(exc)(_BOTH_HGVS_PATHS_FAILED) from exc
             if not alts:
