@@ -20,8 +20,8 @@ tuples); the impl reconstructs the rich types.
 
 Batch annotation mirrors variant-linker's ``processBatchVariants``: inputs are
 canonicalized independently, parse/resolution failures are collected (never
-fail the whole batch), identical canonical variants are de-duplicated into a
-single VEP request, and results are fanned back out to every original input.
+fail the whole batch), repeated inputs share one call, and the whole batch runs
+under one deadline that ends before the hard per-call cap.
 """
 
 from __future__ import annotations
@@ -275,10 +275,11 @@ class VepService:
     ) -> dict:
         """Annotate many variants; collect per-input errors, never fail wholesale.
 
-        Identical canonical variants are de-duplicated into a single VEP region
-        POST and the resulting record is fanned out to every original input. A
-        multi-allelic input yields one result row per ALT allele;
-        ``summary.annotated`` counts inputs, not rows.
+        Each unique input is annotated exactly as ``annotate`` would (shared
+        cache); repeated inputs reuse one call. A multi-allelic input yields one
+        result row per ALT allele: ``summary.annotated`` counts inputs,
+        ``summary.result_rows`` counts rows. Inputs unfinished at
+        ``BATCH_DEADLINE_SECONDS`` come back as per-input ``upstream_timeout`` errors.
         Returns ``{"results", "errors", "summary"}``.
         """
         requested = len(variants)
@@ -287,36 +288,34 @@ class VepService:
                 f"too many variants: {requested} (max {self._settings.BATCH_MAX})"
             )
 
-        errors: list[dict] = []
-        # canonical id -> the originals that map to it (preserves order).
-        canonical_to_inputs: dict[str, list[str]] = {}
-        # canonical id -> its VEP region line.
-        canonical_to_line: dict[str, str] = {}
-        resolved: list[str] = []
-
-        # Recode concurrently (bounded to the client's own slot count so no task
-        # trips its queue-wait) under one deadline that leaves room for the VEP
-        # POST inside the router's 120 s (#114).
+        # Each unique input runs its whole pipeline (recode -> VEP POST) as one
+        # task under ONE batch deadline that ends before the hard per-call cap
+        # (D3): an input still running then -- in any phase -- becomes a per-input
+        # upstream_timeout and every finished input is still returned. Bounded to
+        # the client's slot count so no task trips its queue-wait.
         slots = asyncio.Semaphore(max(1, self._settings.MAX_CONCURRENCY))
 
-        async def all_pairs(original: str) -> list[tuple[str, str]]:
+        async def annotate_one(original: str) -> dict:
             async with slots:
-                pairs, _ = await self._canonical_lines(original, build, None)
-            return pairs
+                return await self.annotate(original, build, vep_options=vep_options)
 
-        tasks = [asyncio.create_task(all_pairs(original)) for original in variants]
+        tasks = {original: asyncio.create_task(annotate_one(original)) for original in variants}
         try:
             _done, pending = (
-                await asyncio.wait(tasks, timeout=self._settings.BATCH_RECODE_DEADLINE_SECONDS)
+                await asyncio.wait(tasks.values(), timeout=self._settings.BATCH_DEADLINE_SECONDS)
                 if tasks
                 else (set(), set())
             )
-        finally:  # deadline hit or caller cancelled: never leave recodes running
-            for task in tasks:
+        finally:  # deadline hit or caller cancelled: never leave work running
+            for task in tasks.values():
                 task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
 
-        for original, task in zip(variants, tasks, strict=True):
+        results: list[dict] = []
+        errors: list[dict] = []
+        annotated = 0
+        for original in variants:  # duplicates fan out from their one shared task
+            task = tasks[original]
             exc = (
                 UpstreamTimeoutError(_BATCH_DEADLINE_MESSAGE)
                 if task in pending
@@ -332,16 +331,10 @@ class VepService:
             elif exc is not None:  # last-resort: one bad input cannot crash the batch
                 errors.append(self._batch_error(original, "internal", exc))
             else:
-                resolved.append(original)
+                annotated += 1
                 # A multi-allelic input yields one result per ALT, never a silent pick.
-                for canonical, vep_line in task.result():
-                    canonical_to_inputs.setdefault(canonical, []).append(original)
-                    canonical_to_line[canonical] = vep_line
-
-        results = await self._annotate_unique(
-            canonical_to_inputs, canonical_to_line, build, vep_options
-        )
-        annotated_inputs = {row["input"] for row in results}
+                # Original input wins over the VEP-echoed region line.
+                results.extend({**row, "input": original} for row in task.result()["variants"])
 
         return {
             "results": results,
@@ -349,47 +342,12 @@ class VepService:
             "summary": {
                 "requested": requested,
                 # Inputs (not ALT rows) that got at least one annotation.
-                "annotated": sum(1 for v in resolved if v in annotated_inputs),
+                "annotated": annotated,
                 "failed": len(errors),
+                # Rows in ``results``: a multi-allelic input contributes one per ALT.
+                "result_rows": len(results),
             },
         }
-
-    async def _annotate_unique(
-        self,
-        canonical_to_inputs: dict[str, list[str]],
-        canonical_to_line: dict[str, str],
-        build: GenomeBuild,
-        vep_options: dict[str, str] | None,
-    ) -> list[dict]:
-        """POST the unique lines once; fan each record back to its inputs."""
-        if not canonical_to_line:
-            return []
-
-        unique_lines = list(canonical_to_line.values())
-        records = await self._client.vep_region_post(unique_lines, build, options=vep_options)
-        # Index records by the line that produced them (record['input'] equals
-        # the posted region line). Reverse the line->canonical map to recover
-        # the canonical id for each returned record.
-        line_to_canonical = {line: cid for cid, line in canonical_to_line.items()}
-        record_by_canonical: dict[str, dict] = {}
-        for record in records:
-            posted_line = record.get("input")
-            if not isinstance(posted_line, str):
-                continue
-            canonical = line_to_canonical.get(posted_line)
-            if canonical is not None:
-                record_by_canonical[canonical] = record
-
-        results: list[dict] = []
-        for canonical, originals in canonical_to_inputs.items():
-            matched = record_by_canonical.get(canonical)
-            if matched is None:
-                continue
-            annotation = build_annotation(matched, variant_id=canonical, assembly=build.value)
-            for original in originals:
-                # Original input wins over the VEP-echoed region line.
-                results.append({**annotation, "input": original})
-        return results
 
     @staticmethod
     def _batch_error(

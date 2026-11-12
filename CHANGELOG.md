@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.15] - 2026-11-12
+
+### Fixed
+
+- `annotate_variants_batch` no longer loses finished results to the 55 s per-call cap. The batch
+  deadline now covers every phase (recode and the VEP POST), each input runs its own pipeline, and the
+  deadline (`BATCH_DEADLINE_SECONDS`, 48 s, validated below the cap) ends first: unfinished inputs come
+  back as per-input `upstream_unavailable` / `upstream_timeout` next to the finished results. Replaces
+  `BATCH_RECODE_DEADLINE_SECONDS`. A resolved input that VEP returns nothing for is now a per-input
+  `not_found` instead of silently missing.
+
+### Added
+
+- `annotate_variants_batch` `summary.result_rows`: the number of result rows (`annotated` counts
+  inputs; a multi-allelic input yields one row per ALT).
+
 ## [1.1.14] - 2026-11-12
 
 ### Fixed
