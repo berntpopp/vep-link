@@ -313,7 +313,7 @@ async def test_annotate_batch_skips_and_collects_errors(
     assert result["results"][0]["gene_symbol"] == "GENE1"
     assert result["errors"][0]["input"] == "NM_x:c.1A>T"
     assert result["errors"][0]["error_code"] == "not_found"
-    assert result["summary"] == {"requested": 2, "annotated": 1, "failed": 1}
+    assert result["summary"] == {"requested": 2, "annotated": 1, "failed": 1, "result_rows": 1}
 
 
 async def test_annotate_batch_parse_error_collected_as_invalid_input(
@@ -342,7 +342,7 @@ async def test_annotate_batch_dedups_identical_inputs(
     # Both inputs map to one unique vep_line; one record annotates both.
     assert client.vep_region_post_calls[0]["lines"] == ["1 1000 . A T . . ."]
     assert len(result["results"]) == 2
-    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0}
+    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0, "result_rows": 2}
 
 
 async def test_annotate_batch_never_raises_on_bad_input(
@@ -633,7 +633,7 @@ async def test_hgvs_fallback_input_error_is_surfaced(
 async def test_batch_of_200_slow_recodes_returns_partial_results_within_deadline(
     settings: Settings, client: FakeEnsemblClient
 ) -> None:
-    fast = settings.model_copy(update={"BATCH_RECODE_DEADLINE_SECONDS": 0.5})
+    fast = settings.model_copy(update={"BATCH_DEADLINE_SECONDS": 0.5})
     svc = VepService(client, fast)  # type: ignore[arg-type]
     client.recoder_get_return = [{"input": "x", "A": {"vcf_string": ["1-1000-A-T"]}}]
     in_flight = peak = 0
@@ -681,7 +681,7 @@ async def test_annotate_batch_expands_multi_allelic_input_to_every_alt(
     result = await service.annotate_batch(["rs6025", "1-1000-A-T"], GRCH38)
     rs_rows = [r["variant_id"] for r in result["results"] if r["input"] == "rs6025"]
     assert rs_rows == ["1-1000-A-C", "1-1000-A-T"]
-    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0}
+    assert result["summary"] == {"requested": 2, "annotated": 2, "failed": 0, "result_rows": 3}
 
 
 async def test_hgvs_recoder_plus_fallback_stay_within_one_overall_deadline(
@@ -695,3 +695,75 @@ async def test_hgvs_recoder_plus_fallback_stay_within_one_overall_deadline(
     # The recoder leaves the reserve free; the fallback gets only what is left of ONE budget.
     assert client.recoder_get_calls[0]["deadline"] == overall - reserve
     assert reserve <= client.vep_hgvs_vcf_deadline <= overall
+
+
+# --- D3: the batch deadline covers EVERY phase, inside the hard per-call cap ---
+
+_ACCEPTANCE_BATCH = ["rs6025", "rs1799963", "NM_006576.4:c.1273C>A", "GGGGCC[2]", "not-a-variant"]
+
+
+@pytest.mark.parametrize("slow_phase", ["recode", "vep_post"])
+async def test_acceptance_batch_returns_finished_results_when_one_input_hangs(
+    settings: Settings, client: FakeEnsemblClient, slow_phase: str
+) -> None:
+    """The 2026-11-12 acceptance batch: rs1799963 never answers (in either phase).
+
+    Before the fix the final VEP POST ran outside any batch deadline, so the
+    hard per-call cap threw the whole batch away. Fake latency only: the stuck
+    call waits on an Event that is never set; everything else answers at once.
+    """
+    deadline = 0.5
+    svc = VepService(client, settings.model_copy(update={"BATCH_DEADLINE_SECONDS": deadline}))  # type: ignore[arg-type]
+    recoded = {
+        "rs6025": [
+            {"A": {"vcf_string": ["1-169549811-C-A"]}, "T": {"vcf_string": ["1-169549811-C-T"]}}
+        ],
+        "rs1799963": [{"A": {"vcf_string": ["11-46739505-G-A"]}}],
+        "NM_006576.4:c.1273C>A": [{"T": {"vcf_string": ["12-57807649-G-T"]}}],
+    }
+    never = asyncio.Event()
+
+    async def fake_recoder(variant: str, build: GenomeBuild, **_: Any) -> Any:
+        if variant == "not-a-variant":
+            raise UpstreamInputError("Ensembl found no variant for this identifier")
+        if variant == "rs1799963" and slow_phase == "recode":
+            await never.wait()
+        return recoded[variant]
+
+    async def fake_vep_post(lines: list[str], build: GenomeBuild, **_: Any) -> Any:
+        if slow_phase == "vep_post" and any(line.startswith("11 46739505") for line in lines):
+            await never.wait()
+        return [_vep_record(line) for line in lines]
+
+    client.recoder_get = fake_recoder  # type: ignore[method-assign]
+    client.vep_region_post = fake_vep_post  # type: ignore[method-assign]
+
+    # Stand-in for the hard per-call cap: must never be what ends the batch.
+    async with asyncio.timeout(deadline * 4):
+        result = await svc.annotate_batch(_ACCEPTANCE_BATCH, GRCH38)
+
+    assert [r["input"] for r in result["results"]] == [
+        "rs6025",
+        "rs6025",
+        "NM_006576.4:c.1273C>A",
+    ]
+    errors = {e["input"]: (e["error_code"], e.get("error_subcode")) for e in result["errors"]}
+    assert errors["rs1799963"] == ("upstream_unavailable", "upstream_timeout")
+    assert errors["GGGGCC[2]"][0] == "invalid_input"
+    assert errors["not-a-variant"][0] == "invalid_input"
+    assert result["summary"] == {
+        "requested": 5,
+        "annotated": 2,
+        "failed": 3,
+        "result_rows": 3,
+    }
+
+
+def test_batch_deadline_must_stay_inside_the_hard_per_call_cap() -> None:
+    from pydantic import ValidationError
+
+    from vep_link.mcp.errors import TOOL_DEADLINE_SECONDS
+
+    assert Settings().BATCH_DEADLINE_SECONDS < TOOL_DEADLINE_SECONDS
+    with pytest.raises(ValidationError):
+        Settings(BATCH_DEADLINE_SECONDS=TOOL_DEADLINE_SECONDS)

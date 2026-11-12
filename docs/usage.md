@@ -181,7 +181,8 @@ curl -sS http://127.0.0.1:8000/mcp \
 
 The result carries `results` (each tagged with its original `input`), `errors`
 (per-input `{input, error_code, message}`), and a `summary`
-(`{requested, annotated, failed}`).
+(`{requested, annotated, failed, result_rows}`: the first three count inputs,
+`result_rows` counts rows, since a multi-allelic input yields one row per ALT).
 
 ## Workflow 3 — recode identifiers
 

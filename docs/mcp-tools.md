@@ -434,10 +434,12 @@ additive `error_subcode` (`unsupported_input`, `build_mismatch`,
 ## `annotate_variants_batch`
 
 **Purpose.** Annotate up to 200 variants in one call instead of looping
-`annotate_variant`. Internally chunked (200/POST) with an inter-chunk delay and a
-concurrency cap; identical canonical variants are de-duplicated into a single VEP
-request and fanned back out. One bad variant never fails the batch — its error is
-collected per-input.
+`annotate_variant`. Each unique input is annotated as `annotate_variant` would
+(shared cache, concurrency cap); repeated inputs are annotated once. The whole batch
+runs under one deadline (`VEP_LINK_BATCH_DEADLINE_SECONDS`, 48 s) that ends before
+the 55 s per-call cap: inputs still unresolved then come back as per-input
+`upstream_unavailable` / `upstream_timeout` errors next to the finished results.
+One bad or slow variant never fails the batch — its error is collected per-input.
 
 **Arguments.**
 
@@ -467,7 +469,7 @@ with its original `input`; failures are listed separately; `summary` counts them
   "errors": [
     {"input": "not-a-variant", "error_code": "invalid_input", "message": "..."}
   ],
-  "summary": {"requested": 2, "annotated": 1, "failed": 1},
+  "summary": {"requested": 2, "annotated": 1, "failed": 1, "result_rows": 1},
   "_meta": {"tool": "annotate_variants_batch", "request_id": "...", "assembly": "GRCh38", "...": "..."}
 }
 ```

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .models.enums import GenomeBuild
@@ -153,9 +153,11 @@ class Settings(BaseSettings):
     OVERALL_DEADLINE_SECONDS: float = 45.0
     # Slice of OVERALL_DEADLINE_SECONDS reserved for the VEP-HGVS fallback when the
     # recoder fails (#111): recoder + fallback never exceed the overall deadline.
-    # BATCH_RECODE_DEADLINE_SECONDS bounds a whole batch's recoding phase (#114).
     HGVS_FALLBACK_DEADLINE_SECONDS: float = 15.0
-    BATCH_RECODE_DEADLINE_SECONDS: float = 30.0
+    # Wall-clock budget for a whole batch, every phase included (#114, D3). It must
+    # end before vep_link.mcp.errors.TOOL_DEADLINE_SECONDS (55 s, the hard cap that
+    # would discard finished results), leaving room to shape the response.
+    BATCH_DEADLINE_SECONDS: float = Field(default=48.0, gt=0, lt=55.0)
     MAX_CONCURRENCY: int = 5
     QUEUE_WAIT_TIMEOUT: int = 20
     MAX_RETRIES: int = 2
