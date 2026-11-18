@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-18
+
+### Changed
+
+- Upgrade FastMCP 3.4 → 4.2.2 and MCP SDK 1.x → 2.x; supports the 2026-07-28 sessionless protocol era alongside the legacy handshake.
+- Not-found guard Layer 3 ported to the SDK 2.x `get_request_handler` / `add_request_handler` API; resource/prompt backstop raises `MCPError(INVALID_PARAMS)` so the JSON-RPC code stays -32602 (SDK 2.x would send code 0).
+
+### Security
+
+- MCP SDK 2.x echoes an unknown JSON-RPC method in the METHOD_NOT_FOUND error `data`; a new outermost low-level middleware strips it (both eras). Log scrub now also covers `mcp.server.runner` drop records.
+
 ## [1.1.16] - 2026-11-13
 
 ### Changed

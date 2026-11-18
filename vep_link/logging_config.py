@@ -48,6 +48,8 @@ def _configure_stdlib_logging(level: str) -> None:
     for name, noisy_level in {
         "httpx": "WARNING",
         "httpcore": "WARNING",
+        "httpx2": "WARNING",
+        "httpcore2": "WARNING",
         "uvicorn.access": "INFO" if is_debug else "WARNING",
         "uvicorn.error": "INFO",
         "fastmcp": "INFO" if is_debug else "WARNING",

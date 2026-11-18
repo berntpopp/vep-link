@@ -467,7 +467,7 @@ async def test_no_tool_publishes_an_output_schema(facade) -> None:
     async with Client(facade) as client:
         tools = await client.list_tools()
     assert tools, "expected a non-empty tool list"
-    with_output = [t.name for t in tools if getattr(t, "outputSchema", None)]
+    with_output = [t.name for t in tools if t.output_schema]
     assert with_output == [], f"tools still publish outputSchema: {with_output}"
 
 
@@ -490,8 +490,8 @@ async def test_total_tool_surface_stays_under_budget(facade) -> None:
                 {
                     "name": t.name,
                     "description": t.description,
-                    "inputSchema": t.inputSchema,
-                    "outputSchema": getattr(t, "outputSchema", None),
+                    "inputSchema": t.input_schema,
+                    "outputSchema": t.output_schema,
                 },
                 default=str,
             )
