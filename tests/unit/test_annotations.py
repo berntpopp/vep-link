@@ -27,9 +27,9 @@ async def test_every_registered_tool_exposes_destructive_hint_false(facade) -> N
     for tool in tools:
         ann = tool.annotations
         assert ann is not None, f"{tool.name} has no annotations"
-        assert ann.readOnlyHint is True, f"{tool.name} readOnlyHint != True"
-        assert ann.destructiveHint is False, (
-            f"{tool.name} must expose destructiveHint=false (was {ann.destructiveHint!r})"
+        assert ann.read_only_hint is True, f"{tool.name} readOnlyHint != True"
+        assert ann.destructive_hint is False, (
+            f"{tool.name} must expose destructiveHint=false (was {ann.destructive_hint!r})"
         )
-        assert ann.idempotentHint is True, f"{tool.name} idempotentHint != True"
-        assert ann.openWorldHint is True, f"{tool.name} openWorldHint != True"
+        assert ann.idempotent_hint is True, f"{tool.name} idempotentHint != True"
+        assert ann.open_world_hint is True, f"{tool.name} openWorldHint != True"
