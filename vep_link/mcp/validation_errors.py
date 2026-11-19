@@ -18,6 +18,7 @@ best-effort no-op when the API differs.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -25,7 +26,7 @@ import structlog
 from fastmcp.exceptions import ValidationError as FastMCPValidationError
 from fastmcp.tools import ToolResult
 
-from vep_link.mcp.errors import McpErrorContext, mcp_tool_error
+from vep_link.mcp.errors import McpErrorContext, log_tool_call, mcp_tool_error
 
 logger = structlog.get_logger("vep_link.mcp.validation_errors")
 
@@ -108,11 +109,20 @@ def install_validation_error_handler(mcp: Any) -> None:
             _tool_name: str = tool_label,
             _allowed: list[str] = tool_params,
         ) -> Any:
+            start = time.perf_counter()
             try:
                 return await _original_run(arguments)
             except (PydanticValidationError, FastMCPValidationError) as exc:
                 ctx = McpErrorContext(tool_name=_tool_name)
                 fields = _offending_fields(exc)
+                # Log declared parameter NAMES only: an unknown key is caller input.
+                log_tool_call(
+                    _tool_name,
+                    outcome="error",
+                    elapsed_ms=int((time.perf_counter() - start) * 1000),
+                    error_code="invalid_input",
+                    fields=[f for f in fields if f in _allowed],
+                )
                 # Name the offending parameter(s) IN the message AND carry them as a
                 # structured `field` (plus the valid `allowed_values`) so a model can
                 # self-correct instead of guessing (Response-Envelope §2; the

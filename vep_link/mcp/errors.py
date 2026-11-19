@@ -440,7 +440,7 @@ async def run_mcp_tool(
     except VepLinkError as exc:
         classified = _classify(exc)
         if classified is None:
-            return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
+            return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start, exc)
         code, subcode, recovery = classified
         # A real upstream fault: feed the breaker and append the fallback-host
         # advice to the recovery. The advice is deliberately endpoint-honest --
@@ -456,9 +456,9 @@ async def run_mcp_tool(
         envelope = mcp_tool_error(
             code=code, message=message, recovery=recovery, ctx=ctx, subcode=subcode
         )
-        return _finalize_error(envelope, ctx, start)
+        return _finalize_error(envelope, ctx, start, exc)
     except Exception as exc:  # error-boundary contract: every other fault -> internal_error
-        return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start)
+        return _finalize_error(_internal_error_envelope(exc, ctx), ctx, start, exc)
 
     # Success: record a healthy outcome, stamp the live upstream hint + timing,
     # inject the flat-banner success key, and emit the call metric.
@@ -481,10 +481,33 @@ async def run_mcp_tool(
         meta["unsafe_for_clinical_use"] = True
         elapsed_ms = _stamp_elapsed(result, start)
     METRICS.record_tool_call(ctx.tool_name, outcome="success", code=None, elapsed_ms=elapsed_ms)
+    log_tool_call(ctx.tool_name, outcome="success", elapsed_ms=elapsed_ms)
     return result
 
 
-def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float) -> ToolResult:
+def _upstream_status(exc: BaseException | None) -> int | None:
+    """HTTP status of the upstream response behind ``exc`` (walks ``__cause__``), if any."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if isinstance(status, int):
+            return status
+        exc = exc.__cause__
+    return None
+
+
+def log_tool_call(tool: str, *, outcome: str, elapsed_ms: int, **fields: Any) -> None:
+    """Emit the one-per-call outcome line (issue #127). Callers pass NO input values."""
+    logger.info("mcp_tool_call", tool=tool, outcome=outcome, elapsed_ms=elapsed_ms, **fields)
+
+
+def _finalize_error(
+    envelope: dict[str, Any],
+    ctx: McpErrorContext,
+    start: float,
+    exc: BaseException | None = None,
+) -> ToolResult:
     """Stamp elapsed timing, record the error metric, and set the wire ``isError`` flag.
 
     Wraps the flat ``envelope`` dict in a :class:`fastmcp.tools.ToolResult` with
@@ -499,4 +522,13 @@ def _finalize_error(envelope: dict[str, Any], ctx: McpErrorContext, start: float
     elapsed_ms = _stamp_elapsed(envelope, start)
     code = str(envelope.get("error_code", "internal"))
     METRICS.record_tool_call(ctx.tool_name, outcome="error", code=code, elapsed_ms=elapsed_ms)
+    log_tool_call(
+        ctx.tool_name,
+        outcome="error",
+        elapsed_ms=elapsed_ms,
+        error_code=code,
+        error_subcode=envelope.get("error_subcode"),
+        exc_type=type(exc).__name__ if exc is not None else None,
+        upstream_status=_upstream_status(exc),
+    )
     return ToolResult(structured_content=envelope, is_error=True)
