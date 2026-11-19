@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-19
+
+### Changed
+
+- Tool descriptions lead with what each tool returns (D1, Tool-Schema Documentation v1.1).
+
 ## [1.2.0] - 2026-11-18
 
 ### Changed
