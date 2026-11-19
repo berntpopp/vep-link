@@ -483,3 +483,85 @@ async def test_run_mcp_tool_caps_wall_clock_with_retryable_timeout(
     assert env["error_code"] == "upstream_unavailable"
     assert env["error_subcode"] == "upstream_timeout"
     assert env["retryable"] is True
+
+
+# ---------------------------------------------------------------------------
+# Per-call outcome log line (issue #127): tool, outcome, code, elapsed, upstream
+# status -- never an input value.
+# ---------------------------------------------------------------------------
+
+_INPUT_SENTINEL = "SENTINEL-17-41246481-A-T"
+
+
+def _call_lines(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in logs if e.get("event") == "mcp_tool_call"]
+
+
+@pytest.fixture
+def _info_level_errors_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests run structlog at WARNING (conftest); the outcome line is INFO, as in prod."""
+    import logging
+
+    import structlog
+
+    from vep_link.mcp import errors
+
+    monkeypatch.setattr(
+        errors,
+        "logger",
+        structlog.wrap_logger(
+            None,
+            wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+            cache_logger_on_first_use=False,
+        ),
+    )
+
+
+@pytest.mark.usefixtures("_info_level_errors_logger")
+async def test_outcome_line_on_success() -> None:
+    async def body() -> dict[str, Any]:
+        return {"variant": _INPUT_SENTINEL}
+
+    with capture_logs() as logs:
+        await run_mcp_tool("annotate_variant", body, _ctx(tool_name="annotate_variant"))
+
+    (line,) = _call_lines(logs)
+    assert line["tool"] == "annotate_variant"
+    assert line["outcome"] == "success"
+    assert isinstance(line["elapsed_ms"], int)
+    assert _INPUT_SENTINEL not in repr(line)
+
+
+@pytest.mark.usefixtures("_info_level_errors_logger")
+async def test_outcome_line_on_upstream_error_carries_status_not_input() -> None:
+    import httpx
+
+    request = httpx.Request("GET", f"https://rest.ensembl.org/vep/{_INPUT_SENTINEL}")
+    cause = httpx.HTTPStatusError("x", request=request, response=httpx.Response(503))
+
+    async def body() -> dict[str, Any]:
+        raise EnsemblApiError(f"Upstream HTTP 503 for {request.url}") from cause
+
+    with capture_logs() as logs:
+        await run_mcp_tool("liftover_variant", body, _ctx(tool_name="liftover_variant"))
+
+    (line,) = _call_lines(logs)
+    assert line["outcome"] == "error"
+    assert line["error_code"] == "upstream_unavailable"
+    assert line["upstream_status"] == 503
+    assert line["exc_type"] == "EnsemblApiError"
+    assert _INPUT_SENTINEL not in repr(line)
+
+
+@pytest.mark.usefixtures("_info_level_errors_logger")
+async def test_outcome_line_on_validation_error_names_declared_fields_only() -> None:
+    from vep_link.mcp.facade import create_vep_mcp
+
+    facade = create_vep_mcp(service_factory=lambda: None)
+    with capture_logs() as logs:
+        await facade.call_tool("resolve_variant", {_INPUT_SENTINEL: 1})
+
+    (line,) = _call_lines(logs)
+    assert line["error_code"] == "invalid_input"
+    assert _INPUT_SENTINEL not in repr(line)
+    assert set(line["fields"]) <= {"variant", "assembly", "response_mode"}

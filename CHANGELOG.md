@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-19
+
+### Added
+
+- One `mcp_tool_call` INFO log line per tool call: tool, outcome, elapsed_ms, and on failure
+  error_code / error_subcode / exception class / upstream HTTP status. Argument-validation failures
+  log declared parameter names only. No input values are logged (#127).
+
 ## [1.2.1] - 2026-11-19
 
 ### Changed
