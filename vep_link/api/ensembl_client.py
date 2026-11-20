@@ -9,7 +9,10 @@ Every call routes to the host for its assembly via the build-aware
 ``Settings.{vep,recoder,map}_url`` helpers: GRCh38 -> ``rest.ensembl.org``,
 GRCh37 -> ``grch37.rest.ensembl.org``.
 
-Batch POSTs (recoder + VEP region) are split into ``settings.CHUNK_SIZE``
+Single-variant VEP region and recoder lookups go through a
+:class:`~vep_link.api.coalesce.MicroBatcher`: concurrent callers within
+``COALESCE_WINDOW_MS`` share one POST of up to ``CHUNK_SIZE`` (<= 200) items
+(#130). The explicit recoder batch POST is split into ``settings.CHUNK_SIZE``
 chunks with a polite ``settings.INTER_CHUNK_DELAY_MS`` pause between them
 (mirroring variant-linker's 200-element / 100 ms convention) and the per-chunk
 list results are concatenated. The inter-chunk sleep is delegated to the HTTP
@@ -22,10 +25,12 @@ Path segments that may contain ``:``, ``>`` or other reserved characters
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from urllib.parse import quote
 
 from vep_link.api.base_client import BaseHTTPClient
+from vep_link.api.coalesce import MicroBatcher
 from vep_link.config import (
     ASSEMBLY_MAP_PATH,
     DEFAULT_VEP_OPTIONS,
@@ -45,6 +50,20 @@ def _fields_to_params(fields: str) -> dict[str, str]:
     return {name: "1" for f in fields.split(",") if (name := f.strip())}
 
 
+def _recoder_input(entry: dict[str, Any]) -> str | None:
+    """The query a recoder POST entry answers (top level or on an allele object)."""
+    for value in (entry, *entry.values()):
+        if isinstance(value, dict) and isinstance(value.get("input"), str):
+            return str(value["input"])
+    return None
+
+
+def _region_input(record: dict[str, Any]) -> str | None:
+    """The region line a VEP POST record answers."""
+    value = record.get("input")
+    return value if isinstance(value, str) else None
+
+
 def _vep_params(options: dict[str, str] | None) -> dict[str, str]:
     """Merge the default VEP option profile with caller overrides (caller wins)."""
     return {**DEFAULT_VEP_OPTIONS, **(options or {})}
@@ -58,6 +77,7 @@ class EnsemblClient:
         # Own the transport only when we build it; an injected client is the
         # caller's to manage, but ``aclose`` still closes it for convenience.
         self._http = http if http is not None else BaseHTTPClient(settings)
+        self._batcher = MicroBatcher(settings.COALESCE_WINDOW_MS / 1000, settings.CHUNK_SIZE)
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client. Idempotent."""
@@ -105,13 +125,26 @@ class EnsemblClient:
         fields: str = "vcf_string",
         deadline: float | None = None,
     ) -> Any:
-        """GET recoded info for a single variant (rsID / HGVS / VCF string).
+        """Recoded info for a single variant (rsID / HGVS / VCF string).
 
-        Ensembl returns a JSON list; it is passed through unchanged. ``deadline``
-        overrides the overall budget (HGVS reserves part of it for the fallback).
+        Sent in a coalesced recoder POST shared with concurrent callers. When that
+        reply has nothing for this input, a single GET follows so Ensembl's precise
+        per-input error (e.g. an unknown transcript version) still surfaces.
+        Returns Ensembl's JSON list. ``deadline`` overrides the overall budget
+        (HGVS reserves part of it for the fallback).
         """
+        params = _fields_to_params(fields)
+        post_url = f"{self._settings.recoder_url(build)}{RECODER_POST_PATH}"
+
+        async def post(ids: list[str]) -> Any:
+            return await self._http.post_json(post_url, {"ids": ids}, params, deadline=deadline)
+
+        key = (post_url, fields, deadline)
+        entries = await self._batcher.submit(key, variant, post, _recoder_input)
+        if entries:
+            return entries
         url = f"{self._settings.recoder_url(build)}{RECODER_GET_PATH}/{quote(variant, safe='')}"
-        return await self._http.get_json(url, _fields_to_params(fields), deadline=deadline)
+        return await self._http.get_json(url, params, deadline=deadline)
 
     async def recoder_post(
         self, ids: list[str], build: GenomeBuild, *, fields: str = "vcf_string"
@@ -129,9 +162,18 @@ class EnsemblClient:
         *,
         options: dict[str, str] | None = None,
     ) -> list[dict]:
-        """POST region-format variant lines to VEP; aggregate chunked results."""
+        """Annotate region-format lines via VEP POST, coalesced with concurrent callers."""
         url = f"{self._settings.vep_url(build)}{VEP_REGION_PATH}"
-        return await self._post_chunked(url, lines, "variants", _vep_params(options))
+        params = _vep_params(options)
+
+        async def post(chunk: list[str]) -> Any:
+            return await self._http.post_json(url, {"variants": chunk}, params)
+
+        key = (url, tuple(sorted(params.items())))
+        per_line = await asyncio.gather(
+            *(self._batcher.submit(key, line, post, _region_input) for line in lines)
+        )
+        return [record for records in per_line for record in records]
 
     async def vep_hgvs_get(
         self, hgvs: str, build: GenomeBuild, *, options: dict[str, str] | None = None

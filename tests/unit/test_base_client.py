@@ -189,7 +189,7 @@ async def test_404_raises_input_error_without_retry(client: BaseHTTPClient) -> N
 
 @respx.mock
 async def test_other_4xx_raises_input_error(client: BaseHTTPClient) -> None:
-    respx.get(URL).mock(return_value=httpx.Response(403))
+    respx.get(URL).mock(return_value=httpx.Response(401))
     try:
         with pytest.raises(UpstreamInputError):
             await client.get_json(URL)

@@ -25,7 +25,10 @@ uv run vep-link config --validate
 | `VEP_LINK_MAX_RETRIES` | `2` | Retry attempts on retryable failures. |
 | `VEP_LINK_BACKOFF_BASE_SECONDS` | `1.0` | Backoff base. |
 | `VEP_LINK_BACKOFF_MAX_SECONDS` | `20.0` | Backoff ceiling. |
-| `VEP_LINK_CHUNK_SIZE` | `200` | Variants per upstream POST chunk. |
+| `VEP_LINK_CHUNK_SIZE` | `200` | Variants per upstream POST (1-200; 200 is Ensembl's maximum). Also the most items one coalesced POST carries. |
+| `VEP_LINK_COALESCE_WINDOW_MS` | `50` | Concurrent single-variant VEP region / Variant Recoder lookups arriving within this window share one POST. Also the latency a lone call gains. |
+| `VEP_LINK_RATE_LIMIT_PER_SECOND` | `8.0` | Client-side request rate per Ensembl host (Ensembl allows 15/s); `0` disables. Paused by `Retry-After` and a 429, slowed when `X-RateLimit-Remaining` is low. |
+| `VEP_LINK_RATE_LIMIT_BURST` | `4` | Requests per host that may go at once before the rate applies. |
 | `VEP_LINK_BATCH_MAX` | `200` | Max variants per batch tool call. |
 | `VEP_LINK_INTER_CHUNK_DELAY_MS` | `100` | Politeness delay between chunks. |
 | `VEP_LINK_CACHE_SIZE` | `1024` | In-process LRU cache entries. |

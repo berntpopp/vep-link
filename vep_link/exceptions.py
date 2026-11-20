@@ -54,6 +54,14 @@ class EnsemblApiError(VepLinkError):
     """A 5xx or transport-level upstream fault. Maps to ``upstream_unavailable`` (retryable)."""
 
 
+class UpstreamBlockedError(EnsemblApiError):
+    """Ensembl refused this deployment (HTTP 403, e.g. a volume block). NOT retried.
+
+    Maps to canonical ``upstream_unavailable`` (subcode ``upstream_blocked``), never
+    ``invalid_input``: rewording a correct variant cannot help (#129).
+    """
+
+
 class DataNotFoundError(VepLinkError):
     """The variant resolved cleanly but no data/mapping was found. Maps to ``not_found``."""
 

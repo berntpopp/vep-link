@@ -40,6 +40,13 @@ def client(settings: Settings) -> EnsemblClient:
 # --- recoder_get ----------------------------------------------------------
 
 
+def _recoder_post_without_entry(base: str = GRCH38_BASE) -> respx.Route:
+    """The coalesced recoder POST answers with no entry, so the single GET follows."""
+    return respx.post(f"{base}/variant_recoder/homo_sapiens").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+
 @respx.mock
 async def test_recoder_get_grch38_hits_default_host_with_vcf_string(
     client: EnsemblClient,
@@ -47,6 +54,7 @@ async def test_recoder_get_grch38_hits_default_host_with_vcf_string(
     route = respx.get(f"{GRCH38_BASE}/variant_recoder/human/rs123").mock(
         return_value=httpx.Response(200, json=RECODER_GET_RS123)
     )
+    _recoder_post_without_entry()
     try:
         result = await client.recoder_get("rs123", GenomeBuild.GRCH38)
     finally:
@@ -63,6 +71,7 @@ async def test_recoder_get_grch37_hits_legacy_host(client: EnsemblClient) -> Non
     route = respx.get(f"{GRCH37_BASE}/variant_recoder/human/rs123").mock(
         return_value=httpx.Response(200, json=RECODER_GET_RS123)
     )
+    _recoder_post_without_entry(GRCH37_BASE)
     try:
         result = await client.recoder_get("rs123", GenomeBuild.GRCH37)
     finally:
@@ -79,6 +88,7 @@ async def test_recoder_get_quotes_the_variant_path_segment(client: EnsemblClient
     route = respx.get(url__regex=rf"{GRCH38_BASE}/variant_recoder/human/.+").mock(
         return_value=httpx.Response(200, json=RECODER_GET_RS123)
     )
+    _recoder_post_without_entry()
     try:
         await client.recoder_get("NM_004006.2:c.4375C>T", GenomeBuild.GRCH38)
     finally:
@@ -94,6 +104,7 @@ async def test_recoder_get_builds_multiple_field_params(client: EnsemblClient) -
     route = respx.get(f"{GRCH38_BASE}/variant_recoder/human/rs123").mock(
         return_value=httpx.Response(200, json=RECODER_GET_RS123)
     )
+    _recoder_post_without_entry()
     try:
         await client.recoder_get("rs123", GenomeBuild.GRCH38, fields="vcf_string,hgvsg")
     finally:
@@ -318,6 +329,7 @@ async def test_injected_http_client_is_used_and_owned_by_caller(settings: Settin
     route = respx.get(f"{GRCH38_BASE}/variant_recoder/human/rs123").mock(
         return_value=httpx.Response(200, json=RECODER_GET_RS123)
     )
+    _recoder_post_without_entry()
     try:
         result = await client.recoder_get("rs123", GenomeBuild.GRCH38)
     finally:
