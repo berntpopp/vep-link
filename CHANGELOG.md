@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-20
+
+### Fixed
+
+- COSMIC identifiers (`COSV`/`COSM`/`COSN`) are never emitted. `response_mode="full"` passed
+  Ensembl's `colocated_variants` through raw, including COSMIC co-located entries and
+  `var_synonyms.COSMIC`; COSMIC terms forbid these ids on free platforms. They are now dropped in
+  `build_annotation` (the public VEP REST has no parameter to exclude them). Guard test covers every
+  response mode with a BRAF V600E fixture.
+
 ## [1.2.2] - 2026-11-19
 
 ### Added

@@ -3,7 +3,7 @@
 Classification (see genefoundry-router
 ``docs/conformance/untrusted-text-inventory.yml``, backend ``vep``):
 vep-link's MCP tools return only SO-term consequence enums, HGVS/SPDI
-notation, curated identifiers (gene/transcript ids, ClinVar/COSMIC/OMIM
+notation, curated identifiers (gene/transcript ids, ClinVar/OMIM
 accessions), and numeric predictor scores -- never upstream free-text prose
 (no disease/trait *names*, no descriptions, no abstracts). This is a
 defense-in-depth regression guard, not a fence: it must fail loudly if a
@@ -27,7 +27,7 @@ Two things are checked:
    ``Phenotypes=1`` (the one caller-allowlisted VEP option most likely to add
    prose): every colocated_variants entry field is a controlled-vocabulary
    enum, a numeric id/PMID, or a nested dict of curated cross-reference
-   accessions (ClinVar RCV/VCV, OMIM, PharmGKB, UniProt, COSMIC) -- never a
+   accessions (ClinVar RCV/VCV, OMIM, PharmGKB, UniProt; COSMIC ids are stripped) -- never a
    disease/trait name or other prose string.
 """
 
