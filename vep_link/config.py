@@ -164,10 +164,18 @@ class Settings(BaseSettings):
     BACKOFF_BASE_SECONDS: float = 1.0
     BACKOFF_MAX_SECONDS: float = 20.0
 
-    # Batch POST chunking (Ensembl region/recoder POST limits).
-    CHUNK_SIZE: int = 200
+    # Batch POST chunking (Ensembl region/recoder POST limits). CHUNK_SIZE is also
+    # the most items one coalesced POST carries; 200 is Ensembl's documented max.
+    CHUNK_SIZE: int = Field(default=200, ge=1, le=200)
     BATCH_MAX: int = 200
     INTER_CHUNK_DELAY_MS: int = 100
+    # Concurrent single-variant calls arriving within this window share one VEP
+    # region / Variant Recoder POST (#130). Also the added latency of a lone call.
+    COALESCE_WINDOW_MS: int = Field(default=50, ge=0, le=1000)
+    # Client-side rate limit per Ensembl host, well under Ensembl's 15 req/s;
+    # 0 disables it. Adapted at runtime from Retry-After / X-RateLimit-* headers.
+    RATE_LIMIT_PER_SECOND: float = Field(default=8.0, ge=0)
+    RATE_LIMIT_BURST: int = Field(default=4, ge=1)
 
     # Hard cap on a single upstream response's DECODED body size (bytes). The
     # capped read fails closed (raises ``ResponseTooLargeError``, never truncates)

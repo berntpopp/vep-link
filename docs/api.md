@@ -186,9 +186,11 @@ client branches on exactly these:
 
 An **additive** `error_subcode` field carries a finer, non-normative
 classification when useful (never one of the six above): `unsupported_input`,
-`build_mismatch`, `upstream_timeout`, `output_validation_failed`. For example an
-`upstream_unavailable` timeout carries `error_subcode: "upstream_timeout"`. Both
-the six `error_codes` and the four `error_subcodes` are surfaced verbatim in the
+`build_mismatch`, `upstream_timeout`, `upstream_blocked`, `output_validation_failed`.
+For example an `upstream_unavailable` timeout carries
+`error_subcode: "upstream_timeout"`, and an Ensembl HTTP 403 refusal carries
+`error_subcode: "upstream_blocked"`. Both the six `error_codes` and the five
+`error_subcodes` are surfaced verbatim in the
 `get_capabilities` payload so a client can branch on them ahead of time.
 
 ### Batch per-input errors

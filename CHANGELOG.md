@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Fewer, politer Ensembl requests (#130). Concurrent single-variant VEP region and
+  Variant Recoder lookups within `VEP_LINK_COALESCE_WINDOW_MS` (50 ms) share one POST of
+  up to 200 variants, so `annotate_variants_batch` and bursts of `annotate_variant` /
+  `resolve_variant` calls send ceil(N/200) POSTs instead of N requests. A whole-POST 400
+  is split per item so one bad variant cannot fail the others.
+- A client-side token bucket per Ensembl host (`VEP_LINK_RATE_LIMIT_PER_SECOND` 8/s,
+  `VEP_LINK_RATE_LIMIT_BURST` 4) honours `Retry-After` and `X-RateLimit-Remaining`/`-Reset`.
+- One `ensembl_request` log line per upstream attempt (host, endpoint, batch size,
+  status, elapsed ms; no variant values); `mcp_tool_call` lines now carry `cache_status`.
+
+### Fixed
+
+- An Ensembl HTTP 403 is no longer reported as `invalid_input` (#129): it is
+  `upstream_unavailable` with the new subcode `upstream_blocked`, and is not retried.
+
 ## [1.2.6] - 2026-11-21
 
 ### Fixed

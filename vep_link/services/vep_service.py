@@ -342,15 +342,13 @@ class VepService:
         # Each unique input runs its whole pipeline (recode -> VEP POST) as one
         # task under ONE batch deadline that ends before the hard per-call cap
         # (D3): an input still running then -- in any phase -- becomes a per-input
-        # upstream_timeout and every finished input is still returned. Bounded to
-        # the client's slot count so no task trips its queue-wait.
-        slots = asyncio.Semaphore(max(1, self._settings.MAX_CONCURRENCY))
-
-        async def annotate_one(original: str) -> dict:
-            async with slots:
-                return await self.annotate(original, build, vep_options=vep_options)
-
-        tasks = {original: asyncio.create_task(annotate_one(original)) for original in variants}
+        # upstream_timeout and every finished input is still returned. All tasks
+        # start together so the client coalesces their recoder and VEP lookups
+        # into one POST per <=200 items (#130); its rate limit paces the rest.
+        tasks = {
+            original: asyncio.create_task(self.annotate(original, build, vep_options=vep_options))
+            for original in dict.fromkeys(variants)  # duplicates share one task
+        }
         try:
             _done, pending = (
                 await asyncio.wait(tasks.values(), timeout=self._settings.BATCH_DEADLINE_SECONDS)

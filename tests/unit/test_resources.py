@@ -50,6 +50,7 @@ EXPECTED_ERROR_SUBCODES = [
     "unsupported_input",
     "build_mismatch",
     "upstream_timeout",
+    "upstream_blocked",
     "output_validation_failed",
 ]
 
