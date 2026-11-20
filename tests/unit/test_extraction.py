@@ -8,6 +8,7 @@ These cover the pure flatten/prioritize/frequency helpers and the top-level
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import ANY
 
 from tests.fixtures import VEP_REGION_INTERGENIC, VEP_REGION_MISSENSE
 from vep_link.services.extraction import (
@@ -307,7 +308,10 @@ def test_build_annotation_missense_shape() -> None:
         "position_scores": {"cadd_phred": 25.1, "cadd_raw": 3.214, "conservation": 5.6},
         "transcript_consequences": flatten_consequences(MISSENSE),
         "frequencies": [{"allele": "T", "gnomade": 0.0001234, "gnomadg": 0.0002345}],
-        "colocated_variants": MISSENSE["colocated_variants"],
+        # the free-text field is fenced (shape pinned in test_no_untrusted_text_surface)
+        "colocated_variants": [
+            {**c, "clinvar_somatic_classification": ANY} for c in MISSENSE["colocated_variants"]
+        ],
     }
 
 

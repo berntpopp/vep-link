@@ -1,8 +1,8 @@
 """Caller-visible-message sanitizer for the MCP error surface.
 
-vep-link is a *classify* backend: it exposes no ``untrusted_text`` fence (its
-success payloads carry only structured, server-derived VEP data, guarded by
-``tests/unit/test_no_untrusted_text_surface.py``). The one residual external-text
+vep-link's success payloads carry structured VEP data plus one fenced prose field
+(``clinvar_somatic_classification``, see ``vep_link.mcp.untrusted_content``), guarded
+by ``tests/unit/test_no_untrusted_text_surface.py``. The other external-text
 surface is the **error path**: an upstream Ensembl 4xx/5xx body, or the
 ``str(exc)`` of an upstream fault, can reach a caller-visible ``message`` /
 ``error`` / diagnostics field in BOTH ``structured_content`` and the

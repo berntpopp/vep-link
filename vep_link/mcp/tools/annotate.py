@@ -37,8 +37,12 @@ from vep_link.mcp.tools._common import (
     spliceai_dbnsfp_note,
     validate_vep_options,
 )
+from vep_link.mcp.untrusted_content import enforce_untrusted_text_limits
 from vep_link.models.enums import GenomeBuild
 
+# Measured v1.1 exception (record in the router inventory): 200 inputs x up to 10
+# fenced co-located entries each (live hotspots carry 1-3 after COSMIC removal).
+_BATCH_MAX_FENCED = 2000
 _RESPONSE_MODE = Literal["minimal", "compact", "standard", "full"]
 _TRANSCRIPTS = Literal["auto", "all"]
 
@@ -190,6 +194,7 @@ def register_annotate_tools(
                 shape_annotation(ann, response_mode, transcripts=transcripts)
                 for ann in result["variants"]
             ]
+            enforce_untrusted_text_limits(shaped_variants)
             first_id = result["variants"][0]["variant_id"] if result.get("variants") else None
             truncated = any("transcripts_summary" in v for v in shaped_variants)
             payload: dict[str, Any] = {
@@ -285,6 +290,7 @@ def register_annotate_tools(
                 original_input = item.get("input")
                 shaped = shape_annotation(item, response_mode, transcripts=transcripts)
                 shaped_results.append({"input": original_input, **shaped})
+            enforce_untrusted_text_limits(shaped_results, max_objects=_BATCH_MAX_FENCED)
             payload: dict[str, Any] = {
                 "assembly": assembly,
                 "results": shaped_results,

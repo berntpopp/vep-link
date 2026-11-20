@@ -13,7 +13,10 @@ perform no network or disk access. Missing keys are handled gracefully via
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from vep_link.mcp.untrusted_content import FENCED_FIELDS, fence_untrusted_text
 
 __all__ = [
     "flatten_consequences",
@@ -245,6 +248,31 @@ def extract_position_scores(vep_record: dict[str, Any]) -> dict[str, Any]:
     return scores
 
 
+# COSMIC terms bar its ids (COSV/COSM/COSN) on free platforms; the public VEP
+# REST has no parameter to exclude them, so they are dropped here.
+_COSMIC_ID_RE = re.compile(r"^COS[VMN]\d+$")
+
+
+def _clean_colocated(colocated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop COSMIC entries/synonym buckets; fence upstream free-text fields."""
+    kept: list[dict[str, Any]] = []
+    for entry in colocated:
+        if _COSMIC_ID_RE.match(str(entry.get("id", ""))):
+            continue
+        synonyms = entry.get("var_synonyms")
+        if isinstance(synonyms, dict) and "COSMIC" in synonyms:
+            entry = {**entry, "var_synonyms": {k: v for k, v in synonyms.items() if k != "COSMIC"}}
+        for field in FENCED_FIELDS:
+            if isinstance(entry.get(field), str):
+                record_id = f"{entry.get('id')}#{field}"
+                fenced = fence_untrusted_text(
+                    entry[field], source="ensembl_vep", record_id=record_id
+                )
+                entry = {**entry, field: fenced}
+        kept.append(entry)
+    return kept
+
+
 def build_annotation(
     vep_record: dict[str, Any], *, variant_id: str, assembly: str
 ) -> dict[str, Any]:
@@ -256,6 +284,10 @@ def build_annotation(
     names a gene on which ``most_severe_consequence`` occurs -- even on a
     contiguous-gene locus where the canonical transcript is a neighbour gene.
     """
+    vep_record = {
+        **vep_record,
+        "colocated_variants": _clean_colocated(vep_record.get("colocated_variants") or []),
+    }
     transcript_rows = flatten_consequences(vep_record)
     representative = select_representative(
         transcript_rows, vep_record.get("most_severe_consequence")

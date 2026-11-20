@@ -100,6 +100,11 @@ VEP_REGION_MISSENSE: list[dict[str, Any]] = [
                 "seq_region_name": "1",
                 "start": 1000,
                 "allele_string": "A/T",
+                # live Ensembl free text (disease names): fenced as untrusted_text
+                "clinvar_somatic_classification": (
+                    "Melanoma(Tier I - Strong:therapeutic:sensitivity/response);"
+                    "Neoplasm(oncogenicity:Oncogenic)"
+                ),
                 "frequencies": {
                     "T": {
                         "gnomade": 0.0001234,
