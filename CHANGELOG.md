@@ -16,6 +16,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `build_annotation` (the public VEP REST has no parameter to exclude them). Guard test covers every
   response mode with a BRAF V600E fixture.
 
+### Security
+
+- `colocated_variants[].clinvar_somatic_classification` (upstream free text with disease names,
+  reaching `response_mode="full"`) is now fenced as a Response-Envelope v1.1 `untrusted_text`
+  object (control/zero-width/bidi code points stripped, `raw_sha256`, provenance). Fenced-object
+  ceilings are enforced and fail closed (`annotate_variants_batch`: measured 2,000 objects).
+
 ## [1.2.2] - 2026-11-19
 
 ### Added

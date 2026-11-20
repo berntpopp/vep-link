@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from vep_link.mcp.untrusted_content import FENCED_FIELDS, fence_untrusted_text
+
 __all__ = [
     "flatten_consequences",
     "most_severe_transcript",
@@ -251,8 +253,8 @@ def extract_position_scores(vep_record: dict[str, Any]) -> dict[str, Any]:
 _COSMIC_ID_RE = re.compile(r"^COS[VMN]\d+$")
 
 
-def _strip_cosmic(colocated: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop COSMIC co-located entries and COSMIC synonym buckets (pure)."""
+def _clean_colocated(colocated: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop COSMIC entries/synonym buckets; fence upstream free-text fields."""
     kept: list[dict[str, Any]] = []
     for entry in colocated:
         if _COSMIC_ID_RE.match(str(entry.get("id", ""))):
@@ -260,6 +262,13 @@ def _strip_cosmic(colocated: list[dict[str, Any]]) -> list[dict[str, Any]]:
         synonyms = entry.get("var_synonyms")
         if isinstance(synonyms, dict) and "COSMIC" in synonyms:
             entry = {**entry, "var_synonyms": {k: v for k, v in synonyms.items() if k != "COSMIC"}}
+        for field in FENCED_FIELDS:
+            if isinstance(entry.get(field), str):
+                record_id = f"{entry.get('id')}#{field}"
+                fenced = fence_untrusted_text(
+                    entry[field], source="ensembl_vep", record_id=record_id
+                )
+                entry = {**entry, field: fenced}
         kept.append(entry)
     return kept
 
@@ -277,7 +286,7 @@ def build_annotation(
     """
     vep_record = {
         **vep_record,
-        "colocated_variants": _strip_cosmic(vep_record.get("colocated_variants") or []),
+        "colocated_variants": _clean_colocated(vep_record.get("colocated_variants") or []),
     }
     transcript_rows = flatten_consequences(vep_record)
     representative = select_representative(
