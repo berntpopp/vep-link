@@ -63,6 +63,9 @@ Ensembl is an external research data service and is treated as one:
 
 - Batch POSTs are chunked at `VEP_LINK_CHUNK_SIZE` (200) variants with a
   `VEP_LINK_INTER_CHUNK_DELAY_MS` (100 ms) politeness delay between chunks.
+- Concurrent VEP region and Variant Recoder lookups are coalesced into one POST
+  per `VEP_LINK_COALESCE_WINDOW_MS` window (`api/coalesce.py`), and every request
+  waits on a per-host token bucket (`api/rate_limit.py`, 8 req/s by default).
 - The batch tools accept at most `VEP_LINK_BATCH_MAX` (200) variants per call.
 - A concurrency semaphore caps in-flight upstream requests
   (`VEP_LINK_MAX_CONCURRENCY`, default 5).

@@ -8,7 +8,10 @@ request runs through a jittered exponential-backoff retry loop that:
 - retries transient transport faults and ``{429, 500, 502, 503, 504}`` statuses;
 - honors ``Retry-After`` (integer seconds *or* HTTP-date) on 429s, waiting at
   least that long;
-- fails fast (no retry) on deterministic input errors ``{400, 404, 410, 422}``,
+- waits on a per-host client-side rate limit (:mod:`vep_link.api.rate_limit`)
+  before each attempt, adapted from Ensembl's ``Retry-After`` / ``X-RateLimit-*``;
+- fails fast (no retry) on a 403 (Ensembl refusing this deployment, #129) and on
+  deterministic input errors ``{400, 404, 410, 422}``,
   except a 400 that carries no Ensembl ``{"error": ...}`` body, which is an
   upstream flake (retried, then ``upstream_unavailable``);
 - maps every terminal outcome onto the vep-link exception taxonomy so the MCP
@@ -25,12 +28,17 @@ import asyncio
 import json
 import logging
 import random
+import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
+import structlog
 
+from vep_link.api.rate_limit import TokenBucket
 from vep_link.api.url_guard import OUTBOUND_POLICY_ERROR, build_allowed_origins, make_url_guard
 from vep_link.config import Settings
 from vep_link.exceptions import (
@@ -38,6 +46,7 @@ from vep_link.exceptions import (
     EnsemblApiError,
     RateLimitedError,
     ResponseTooLargeError,
+    UpstreamBlockedError,
     UpstreamInputError,
     UpstreamTimeoutError,
 )
@@ -49,6 +58,10 @@ from vep_link.observability.telemetry import record_upstream
 _MAX_REDIRECTS = 5
 
 logger = logging.getLogger(__name__)
+_upstream_log = structlog.get_logger("vep_link.api.upstream")
+# Leading path segments that name an endpoint; the first segment that is not
+# [a-z_] (a variant, region, or assembly) ends it, so no input value is logged.
+_ENDPOINT_SEGMENT_RE = re.compile(r"^[a-z_]+$")
 
 # Transient upstream faults worth retrying (rate limit + 5xx gateway errors).
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -98,6 +111,18 @@ class BaseHTTPClient:
             settings.VEP_GRCH38_URL, settings.VEP_GRCH37_URL
         )
         self._max_response_bytes = settings.MAX_RESPONSE_BYTES
+        self._buckets: dict[str, TokenBucket] = {}
+
+    def _bucket(self, url: str) -> TokenBucket:
+        """The rate-limit bucket for ``url``'s host (one per Ensembl host)."""
+        host = urlsplit(url).netloc
+        if host not in self._buckets:
+            self._buckets[host] = TokenBucket(
+                self._settings.RATE_LIMIT_PER_SECOND,
+                self._settings.RATE_LIMIT_BURST,
+                sleep=lambda seconds: self._sleep(seconds),
+            )
+        return self._buckets[host]
 
     def _attempt_timeout(self, remaining: float) -> httpx.Timeout:
         """Per-attempt timeout, capped to the remaining overall-deadline budget."""
@@ -188,6 +213,7 @@ class BaseHTTPClient:
         params: dict[str, Any] | None = None,
         *,
         headers: dict[str, str] | None = None,
+        deadline: float | None = None,
     ) -> Any:
         """POST ``json_body`` as JSON to ``url``, returning parsed JSON."""
         merged = {"Content-Type": "application/json", **(headers or {})}
@@ -197,12 +223,18 @@ class BaseHTTPClient:
                 "POST", url, json=json_body, params=params, headers=merged, timeout=timeout
             )
 
-        return await self._request(url, _send)
+        values = json_body.values() if isinstance(json_body, dict) else []
+        items = [len(v) for v in values if isinstance(v, list)]
+        return await self._request(url, _send, deadline, batch_size=sum(items) if items else None)
 
     # -- capped streamed read ---------------------------------------------
 
     async def _read_capped(
-        self, send: Any, client: httpx.AsyncClient, timeout: httpx.Timeout
+        self,
+        send: Any,
+        client: httpx.AsyncClient,
+        timeout: httpx.Timeout,
+        on_response: Callable[[httpx.Response], None],
     ) -> Any:
         """Send (streaming) and return parsed JSON, capping the DECODED body.
 
@@ -219,6 +251,7 @@ class BaseHTTPClient:
         ``httpx`` fault, so :meth:`_request` never retries it.
         """
         async with send(client, timeout) as response:
+            on_response(response)
             if response.status_code == 400:
                 detail = await _ensembl_error_text(response)
                 if detail is None:
@@ -245,6 +278,7 @@ class BaseHTTPClient:
         url: str,
         send: Any,
         deadline: float | None = None,
+        batch_size: int | None = None,
     ) -> Any:
         """Run ``send`` through the bounded-concurrency, jittered-retry loop.
 
@@ -262,6 +296,13 @@ class BaseHTTPClient:
         )
         max_retries = self._settings.MAX_RETRIES
         last_exc: BaseException | None = None
+        bucket = self._bucket(url)
+        status: list[int | None] = [None]
+
+        def on_response(response: httpx.Response) -> None:
+            status[0] = response.status_code
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            bucket.observe(response.status_code, response.headers, retry_after)
 
         for attempt in range(max_retries + 1):
             remaining = op_deadline - loop.time()
@@ -270,6 +311,8 @@ class BaseHTTPClient:
             is_last = attempt >= max_retries or remaining <= 0
             if attempt > 0 and remaining <= 0:
                 _raise_terminal(last_exc, url)
+            # The rate-limit wait never outlasts this call's remaining budget.
+            await bucket.acquire(max_wait=max(0.0, remaining))
             # Wait for a concurrency slot with a fresh per-attempt budget
             # (backpressure is independent of the read/deadline budget). Using an
             # absolute deadline here would make a retry after a slow first attempt
@@ -277,25 +320,32 @@ class BaseHTTPClient:
             await self._acquire_slot(timeout=float(self._settings.QUEUE_WAIT_TIMEOUT))
             retry_after: float | None = None
             attempt_start = loop.time()
+            status[0] = None
             try:
-                return await self._read_capped(send, client, self._attempt_timeout(remaining))
+                return await self._read_capped(
+                    send, client, self._attempt_timeout(remaining), on_response
+                )
             except httpx.TooManyRedirects as exc:
                 raise DisallowedURLError(OUTBOUND_POLICY_ERROR) from exc
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
-                status = exc.response.status_code
-                if status in _INPUT_ERROR_STATUS:
-                    raise UpstreamInputError(_safe_upstream_input_message(status)) from exc
-                if status not in _RETRYABLE_STATUS:
-                    # Non-retryable 4xx (e.g. 401/403): deterministic input error.
-                    raise UpstreamInputError(_safe_upstream_input_message(status)) from exc
+                code = exc.response.status_code
+                if code == 403:
+                    # Ensembl's load balancer refusing this deployment: retrying or
+                    # rewording the input cannot help, so never retry it (#129).
+                    raise UpstreamBlockedError(_BLOCKED_MESSAGE) from exc
+                if code in _INPUT_ERROR_STATUS:
+                    raise UpstreamInputError(_safe_upstream_input_message(code)) from exc
+                if code not in _RETRYABLE_STATUS:
+                    # Other non-retryable 4xx (e.g. 401): deterministic input error.
+                    raise UpstreamInputError(_safe_upstream_input_message(code)) from exc
                 if is_last:
-                    if status == 429:
+                    if code == 429:
                         raise RateLimitedError(
                             f"Rate limited by upstream (HTTP 429) after retries: {url}"
                         ) from exc
-                    raise EnsemblApiError(f"Upstream HTTP {status} for {url}") from exc
-                if status == 429:
+                    raise EnsemblApiError(f"Upstream HTTP {code} for {url}") from exc
+                if code == 429:
                     retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
             except httpx.TimeoutException as exc:
                 last_exc = exc
@@ -308,8 +358,18 @@ class BaseHTTPClient:
             finally:
                 # Accumulate this attempt's upstream wall-time (success or fault)
                 # into the request-scoped telemetry, then free the concurrency slot.
-                record_upstream((loop.time() - attempt_start) * 1000)
+                elapsed_ms = (loop.time() - attempt_start) * 1000
+                record_upstream(elapsed_ms)
                 self._semaphore.release()
+                _upstream_log.info(
+                    "ensembl_request",
+                    host=urlsplit(url).netloc,
+                    endpoint=_endpoint(url),
+                    batch_size=batch_size,
+                    attempt=attempt,
+                    status=status[0],
+                    elapsed_ms=int(elapsed_ms),
+                )
 
             await self._backoff(attempt, retry_after)
 
@@ -327,6 +387,23 @@ class BaseHTTPClient:
         if retry_after is not None:
             wait = max(wait, retry_after)
         await self._sleep(wait)
+
+
+_BLOCKED_MESSAGE = (
+    "Ensembl refused this server's request (HTTP 403). Ensembl answers 403 when a "
+    "client address sent too many requests or is blocked; the input is not the "
+    "problem. Do not reword it; retry much later."
+)
+
+
+def _endpoint(url: str) -> str:
+    """The endpoint part of ``url``'s path, with any input value cut off."""
+    kept: list[str] = []
+    for segment in urlsplit(url).path.split("/")[1:]:
+        if not _ENDPOINT_SEGMENT_RE.match(segment):
+            break
+        kept.append(segment)
+    return "/" + "/".join(kept)
 
 
 def _raise_terminal(last_exc: BaseException | None, url: str) -> None:

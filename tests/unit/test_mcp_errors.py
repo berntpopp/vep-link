@@ -102,6 +102,7 @@ def test_error_subcodes_are_additive_and_disjoint_from_canon() -> None:
         "unsupported_input",
         "build_mismatch",
         "upstream_timeout",
+        "upstream_blocked",
         "output_validation_failed",
     )
     # A subcode is NEVER one of the six canonical error_code values.

@@ -244,10 +244,22 @@ limits:
 - On HTTP 429 the upstream `Retry-After` header is honored.
 - Batch POSTs are chunked at `VEP_LINK_CHUNK_SIZE` (200) variants with a
   `VEP_LINK_INTER_CHUNK_DELAY_MS` (100 ms) politeness delay.
+- Concurrent single calls (and every input of `annotate_variants_batch`) are
+  coalesced: lookups arriving within `VEP_LINK_COALESCE_WINDOW_MS` (50 ms) share
+  one VEP region / Variant Recoder POST of up to 200 variants.
+- A client-side rate limit (`VEP_LINK_RATE_LIMIT_PER_SECOND` 8/s per host, burst
+  `VEP_LINK_RATE_LIMIT_BURST` 4) keeps well under Ensembl's 15 req/s. It honours
+  `Retry-After` and `X-RateLimit-Remaining`/`-Reset`. A call whose wait would
+  outlast its deadline fails fast as `rate_limited`.
+- HTTP 403 (Ensembl refusing this deployment) is never retried; it is reported as
+  `upstream_unavailable` with subcode `upstream_blocked`, not `invalid_input`.
+- Every upstream attempt logs one `ensembl_request` line (host, endpoint, batch
+  size, attempt, status, elapsed_ms); variant values are never logged.
 
 If retries are exhausted, the tool returns a structured error envelope:
 `rate_limited` (429 after retries) or `upstream_unavailable` (5xx / transport
-error / timeout; a timeout carries subcode `upstream_timeout`). These are
+error / timeout; a timeout carries subcode `upstream_timeout`, a 403 carries
+`upstream_blocked`). These are
 retryable — back off and retry, or
 reduce parallelism. Treat live Ensembl rate limits as upstream state, not a local
 failure.
