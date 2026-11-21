@@ -583,3 +583,19 @@ def test_compact_antisense_splice_does_not_hide_coding_missense() -> None:
     assert shaped["representative_transcript"]["gene_symbol"] == "HNF1A"
     assert shaped["representative_transcript"]["revel"] == 0.9
     assert shaped["most_severe_transcript"]["gene_symbol"] == "HNF1A-AS1"
+
+
+def test_compact_flags_unmatched_requested_transcript() -> None:
+    shaped = shape_annotation(
+        _ptpn11_data(requested_transcript="NM_999.1", requested_transcript_matched=False),
+        "compact",
+    )
+    assert shaped["requested_transcript"] == "NM_999.1"
+    assert shaped["requested_transcript_matched"] is False
+    assert "requested_transcript_matched" not in shape_annotation(_ptpn11_data(), "compact")
+    # standard (and batch rows, which carry no per-input warnings) keep the flag too.
+    standard = shape_annotation(
+        _ptpn11_data(requested_transcript="NM_999.1", requested_transcript_matched=False),
+        "standard",
+    )
+    assert standard["requested_transcript_matched"] is False

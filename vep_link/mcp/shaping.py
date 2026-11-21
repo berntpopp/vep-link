@@ -164,6 +164,9 @@ def _identity_with_position(data: dict[str, Any]) -> dict[str, Any]:
     scores = data.get("position_scores") or {}
     if scores:
         shaped["position_scores"] = dict(scores)
+    if data.get("requested_transcript_matched") is not None:
+        shaped["requested_transcript"] = data.get("requested_transcript")
+        shaped["requested_transcript_matched"] = data["requested_transcript_matched"]
     return shaped
 
 

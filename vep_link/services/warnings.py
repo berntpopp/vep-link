@@ -15,7 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["multiple_alts_warning", "ref_not_validated_warning", "resolved_via_vep_hgvs_warning"]
+__all__ = [
+    "multiple_alts_warning",
+    "ref_not_validated_warning",
+    "requested_transcript_not_found_warning",
+    "resolved_via_vep_hgvs_warning",
+]
 
 
 def multiple_alts_warning(variants: list[str]) -> dict[str, Any]:
@@ -60,4 +65,28 @@ def resolved_via_vep_hgvs_warning() -> dict[str, Any]:
             "VEP's own HGVS endpoint instead."
         ),
         "context": {"resolution_path": "vep_hgvs", "unavailable": "variant_recoder"},
+    }
+
+
+def requested_transcript_not_found_warning(
+    *, requested: str, chosen: str | None, chosen_mane_select: str | None
+) -> dict[str, Any]:
+    """Signal that the HGVS-named transcript is not among VEP's returned transcripts.
+
+    The representative is then MANE/canonical, so its consequence, c. and p. are
+    NOT on the transcript the caller asked about.
+    """
+    return {
+        "code": "requested_transcript_not_found",
+        "message": (
+            "The transcript named in the input is not among the transcripts VEP returned; "
+            "representative_transcript is another transcript (see context). Its c./p. "
+            "and consequence do not describe the requested transcript. For a RefSeq "
+            'transcript, retry with vep_options={"refseq": "1"}.'
+        ),
+        "context": {
+            "requested_transcript": requested,
+            "chosen_transcript": chosen,
+            "chosen_mane_select": chosen_mane_select,
+        },
     }

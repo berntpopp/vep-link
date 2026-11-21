@@ -133,7 +133,12 @@ _RESPONSE_MODES = ["minimal", "compact", "standard", "full"]
 
 # Codes for the top-level ``warnings[]`` channel (honest non-fatal signals that
 # ride alongside a successful result; distinct from the error envelope's codes).
-_WARNING_CODES = ["multiple_alts", "ref_not_validated", "resolved_via_vep_hgvs"]
+_WARNING_CODES = [
+    "multiple_alts",
+    "ref_not_validated",
+    "requested_transcript_not_found",
+    "resolved_via_vep_hgvs",
+]
 
 _RESOURCES = [
     "vep://capabilities",

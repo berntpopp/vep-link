@@ -50,10 +50,11 @@ from vep_link.services._recoding import (
     project_recode_fields,
     vep_vcf_strings,
 )
-from vep_link.services.extraction import build_annotation
+from vep_link.services.extraction import build_annotation, select_representative
 from vep_link.services.warnings import (
     multiple_alts_warning,
     ref_not_validated_warning,
+    requested_transcript_not_found_warning,
     resolved_via_vep_hgvs_warning,
 )
 from vep_link.variant import (
@@ -101,6 +102,27 @@ def _alt_warnings(pairs: list[tuple[str, str]]) -> list[dict]:
     if len(pairs) <= 1:
         return []
     return [multiple_alts_warning([canonical for canonical, _ in pairs])]
+
+
+def _transcript_warnings(annotations: list[dict]) -> list[dict]:
+    """A ``requested_transcript_not_found`` warning per annotation answered elsewhere."""
+    warnings: list[dict] = []
+    for ann in annotations:
+        if ann["requested_transcript_matched"] is not False:
+            continue
+        rep = select_representative(
+            ann["transcript_consequences"],
+            ann["most_severe_consequence"],
+            ann["requested_transcript"],
+        )
+        warnings.append(
+            requested_transcript_not_found_warning(
+                requested=ann["requested_transcript"],
+                chosen=rep.get("transcript_id") if rep else None,
+                chosen_mane_select=rep.get("mane_select") if rep else None,
+            )
+        )
+    return warnings
 
 
 class VepService:
@@ -201,6 +223,7 @@ class VepService:
             line: rec for rec in records if isinstance((line := rec.get("input")), str)
         }
         variants: list[dict] = []
+        annotations: list[dict] = []
         for canonical, line in pairs:
             record = by_line.get(line)
             if record is None:
@@ -208,6 +231,7 @@ class VepService:
             ann = build_annotation(
                 record, variant_id=canonical, assembly=build.value, query=variant
             )
+            annotations.append(ann)
             variants.append(
                 {
                     "variant_id": ann["variant_id"],
@@ -222,7 +246,7 @@ class VepService:
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs) + path_warnings,
+            "warnings": _alt_warnings(pairs) + path_warnings + _transcript_warnings(annotations),
         }
 
     # -- annotate ----------------------------------------------------------
@@ -265,7 +289,7 @@ class VepService:
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs) + path_warnings,
+            "warnings": _alt_warnings(pairs) + path_warnings + _transcript_warnings(variants),
         }
 
     # -- annotate_batch ----------------------------------------------------

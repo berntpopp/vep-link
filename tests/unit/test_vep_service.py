@@ -596,7 +596,11 @@ async def test_hgvs_resolves_via_vep_when_recoder_unreachable(
     result = await service.resolve("NM_006576.4:c.1273C>A", GRCH38)
     assert client.vep_hgvs_vcf_calls == ["NM_006576.4:c.1273C>A"]
     assert result["variants"][0]["variant_id"] == "1-1000-A-T"
-    assert [w["code"] for w in result["warnings"]] == ["resolved_via_vep_hgvs"]
+    # The fixture's transcripts do not include NM_006576.4, so that is flagged too.
+    assert [w["code"] for w in result["warnings"]] == [
+        "resolved_via_vep_hgvs",
+        "requested_transcript_not_found",
+    ]
 
 
 async def test_rsid_recoder_failure_does_not_use_hgvs_fallback(
@@ -767,3 +771,31 @@ def test_batch_deadline_must_stay_inside_the_hard_per_call_cap() -> None:
     assert Settings().BATCH_DEADLINE_SECONDS < TOOL_DEADLINE_SECONDS
     with pytest.raises(ValidationError):
         Settings(BATCH_DEADLINE_SECONDS=TOOL_DEADLINE_SECONDS)
+
+
+# --- requested transcript not among VEP's transcripts --------------------
+
+
+async def test_annotate_warns_when_requested_transcript_unmatched(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    # Non-MANE RefSeq the VEP (Ensembl) transcript set does not carry: never a silent MANE answer.
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_return = [{"input": "NM_999999.1:c.1A>T", "vcf_string": "1-1000-A-T"}]
+    result = await service.annotate("NM_999999.1:c.1A>T", GRCH38)
+    ann = result["variants"][0]
+    assert ann["requested_transcript_matched"] is False
+    warning = next(w for w in result["warnings"] if w["code"] == "requested_transcript_not_found")
+    assert warning["context"]["requested_transcript"] == "NM_999999.1"
+    assert warning["context"]["chosen_transcript"] == "ENST00000123456"
+    assert warning["context"]["chosen_mane_select"] == "NM_004006.2"
+
+
+async def test_annotate_no_warning_when_requested_transcript_matches(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_error = UpstreamTimeoutError("recoder timed out")
+    client.vep_hgvs_vcf_return = [{"input": "NM_004006.2:c.1A>T", "vcf_string": "1-1000-A-T"}]
+    result = await service.annotate("NM_004006.2:c.1A>T", GRCH38)
+    assert result["variants"][0]["requested_transcript_matched"] is True
+    assert "requested_transcript_not_found" not in [w["code"] for w in result["warnings"]]

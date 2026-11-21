@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-11-21
+
+### Fixed
+
+- A transcript-level HGVS whose transcript (NM_/ENST) is not among the transcripts VEP returned no
+  longer gets a silent MANE answer. `annotate_variant` and `resolve_variant` add a
+  `requested_transcript_not_found` warning naming the requested and the chosen transcript, and the
+  compact and standard annotation carry `requested_transcript` + `requested_transcript_matched` (`false` here,
+  `true` on a match; omitted when no transcript was requested).
+- Order-dependent unit-test failure (`test_internal_error_log_excludes_exception_detail`): a test
+  that reconfigured structlog replaced the processor list that earlier-cached loggers still held,
+  so `capture_logs` missed them. `tests/conftest.py` now restores the structlog config after each
+  test.
+
 ## [1.2.4] - 2026-11-21
 
 ### Fixed
