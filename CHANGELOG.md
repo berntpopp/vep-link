@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-11-21
+
+### Fixed
+
+- `GENE p.X` and `GENE p.(X)` (gene symbol, whitespace, protein change, e.g. `FLT3 p.Asp835Tyr`)
+  are normalised to `GENE:p.X` before Variant Recoder instead of failing as HTTP 400 (#136).
+- `annotate_variant` and `resolve_variant` with a protein-change input list first the allele whose representative
+  transcript `hgvsp` is the requested change (3- and 1-letter amino acids compare equal); the other
+  alleles keep their order. The `multiple_alts` warning names it in `context.matches_protein_change`
+  and lists `variants` in the returned order (#136).
+
 ## [1.2.5] - 2026-11-21
 
 ### Fixed

@@ -21,6 +21,7 @@ from vep_link.variant import (
     coordinate_to_vep_line,
     needs_recoding,
     parse_variant_input,
+    protein_change,
 )
 
 
@@ -275,3 +276,37 @@ def test_hgvs_repeat_notation_rejected_fast(text: str) -> None:
     """#115: Ensembl cannot parse repeated-sequence [n]; fail locally, not after a 20 s 400."""
     with pytest.raises(UnsupportedContigError, match="repeat"):
         parse_variant_input(text)
+
+
+# --------------------------------------------------------------------------- #
+# "GENE p.X" -> "GENE:p.X" (#136)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("FLT3 p.Asp835Tyr", "FLT3:p.Asp835Tyr"),
+        ("FLT3 p.D835Y", "FLT3:p.D835Y"),
+        ("FLT3 p.(Asp835Tyr)", "FLT3:p.Asp835Tyr"),
+        ("  HLA-A   p.(R97*)  ", "HLA-A:p.R97*"),
+        ("FLT3:p.Asp835Tyr", "FLT3:p.Asp835Tyr"),
+        ("FLT3:p.D835Y", "FLT3:p.D835Y"),
+    ],
+)
+def test_gene_space_protein_change_normalised(text: str, expected: str) -> None:
+    assert parse_variant_input(text) == VariantInput(kind=InputKind.HGVS, value=expected)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("FLT3:p.Asp835Tyr", "D835Y"),
+        ("FLT3:p.(D835Y)", "D835Y"),
+        ("ENSP00000241453.7:p.Asp835Tyr", "D835Y"),
+        ("ENSP1:p.Arg97ProfsTer23", "R97Pfs*23"),
+        ("ENSP1:p.Leu12%3D", "L12="),  # VEP URI-escapes "=" in hgvsp
+        ("NM_004006.2:c.4375C>T", None),
+        ("1-1000-A-T", None),
+    ],
+)
+def test_protein_change_one_letter(text: str, expected: str | None) -> None:
+    assert protein_change(text) == expected

@@ -63,6 +63,7 @@ from vep_link.variant import (
     coordinate_to_vep_line,
     needs_recoding,
     parse_variant_input,
+    protein_change,
 )
 
 # NB: batch per-input error classification is NOT duplicated here. It shares the
@@ -94,14 +95,34 @@ def _allele_matches(canonical: str, allele: str) -> bool:
     return allele == canonical or canonical.rsplit("-", 1)[-1] == allele
 
 
-def _alt_warnings(pairs: list[tuple[str, str]]) -> list[dict]:
-    """Build the shared ``warnings`` list for a resolved pair set.
+def _alt_warnings(variant_ids: list[str], matching: str | None = None) -> list[dict]:
+    """Build the shared ``warnings`` list for a resolved allele set.
 
     A ``multiple_alts`` warning when an input expanded to >1 ALT allele, else [].
     """
-    if len(pairs) <= 1:
+    if len(variant_ids) <= 1:
         return []
-    return [multiple_alts_warning([canonical for canonical, _ in pairs])]
+    return [multiple_alts_warning(variant_ids, matching=matching)]
+
+
+def _protein_match_first(query: str, annotations: list[dict]) -> tuple[list[dict], str | None]:
+    """Move the allele whose representative ``hgvsp`` is the input's p. change first (#136).
+
+    Returns the (stably) reordered annotations and the matching ``variant_id``;
+    a non-protein input or no match leaves the order unchanged.
+    """
+    wanted = protein_change(parse_variant_input(query).value)
+    if wanted is None:
+        return annotations, None
+    for i, ann in enumerate(annotations):
+        rep = select_representative(
+            ann["transcript_consequences"],
+            ann["most_severe_consequence"],
+            ann["requested_transcript"],
+        )
+        if rep is not None and protein_change(rep.get("hgvsp") or "") == wanted:
+            return [ann, *annotations[:i], *annotations[i + 1 :]], ann["variant_id"]
+    return annotations, None
 
 
 def _transcript_warnings(annotations: list[dict]) -> list[dict]:
@@ -222,31 +243,30 @@ class VepService:
         by_line: dict[str, dict] = {
             line: rec for rec in records if isinstance((line := rec.get("input")), str)
         }
-        variants: list[dict] = []
-        annotations: list[dict] = []
-        for canonical, line in pairs:
-            record = by_line.get(line)
-            if record is None:
-                continue
-            ann = build_annotation(
-                record, variant_id=canonical, assembly=build.value, query=variant
+        annotations = [
+            build_annotation(
+                by_line[line], variant_id=canonical, assembly=build.value, query=variant
             )
-            annotations.append(ann)
-            variants.append(
-                {
-                    "variant_id": ann["variant_id"],
-                    "assembly": ann["assembly"],
-                    "gene_symbol": ann["gene_symbol"],
-                    "most_severe_consequence": ann["most_severe_consequence"],
-                }
-            )
-        if not variants:
+            for canonical, line in pairs
+            if line in by_line
+        ]
+        if not annotations:
             raise DataNotFoundError(f"No VEP annotation found for {variant!r}")
+        annotations, matching = _protein_match_first(variant, annotations)
+        variants = [
+            {
+                k: ann[k]
+                for k in ("variant_id", "assembly", "gene_symbol", "most_severe_consequence")
+            }
+            for ann in annotations
+        ]
         return {
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs) + path_warnings + _transcript_warnings(annotations),
+            "warnings": _alt_warnings([v["variant_id"] for v in variants], matching)
+            + path_warnings
+            + _transcript_warnings(annotations),
         }
 
     # -- annotate ----------------------------------------------------------
@@ -285,11 +305,14 @@ class VepService:
         ]
         if not variants:
             raise DataNotFoundError(f"No VEP annotation found for {variant!r}")
+        variants, matching = _protein_match_first(variant, variants)
         return {
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings(pairs) + path_warnings + _transcript_warnings(variants),
+            "warnings": _alt_warnings([v["variant_id"] for v in variants], matching)
+            + path_warnings
+            + _transcript_warnings(variants),
         }
 
     # -- annotate_batch ----------------------------------------------------
