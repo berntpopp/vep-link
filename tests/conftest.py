@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+import structlog
 
 from vep_link.config import Settings
 from vep_link.logging_config import configure_logging
@@ -22,6 +23,19 @@ from vep_link.logging_config import configure_logging
 # production) so exception logging via ``format_exc_info`` does not emit the
 # ConsoleRenderer "pretty exceptions" warning during error-path tests.
 configure_logging("WARNING", "json")
+
+
+@pytest.fixture(autouse=True)
+def _restore_structlog_config() -> Any:
+    """Undo a test's structlog reconfiguration (e.g. ``configure_logging``).
+
+    Loggers cached on first use keep the processor list that was current then;
+    ``capture_logs`` edits the *current* list in place, so a replaced list makes
+    later captures miss those loggers (order-dependent failures).
+    """
+    saved = structlog.get_config()
+    yield
+    structlog.configure(**saved)
 
 
 def _blocked_network(*_args: Any, **_kwargs: Any) -> Any:

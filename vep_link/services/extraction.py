@@ -25,6 +25,7 @@ __all__ = [
     "prioritize_transcript",
     "select_representative",
     "requested_transcript",
+    "names_transcript",
     "extract_gnomad_frequencies",
     "extract_position_scores",
     "build_annotation",
@@ -205,6 +206,12 @@ def _unversioned(accession: Any) -> str | None:
     return accession.split(".", 1)[0] if isinstance(accession, str) else None
 
 
+def names_transcript(tc: dict[str, Any], requested: str) -> bool:
+    """Whether ``tc`` is ``requested`` (Ensembl id or MANE RefSeq, version-insensitive)."""
+    ids = (tc.get("transcript_id"), tc.get("mane_select"), tc.get("mane_plus_clinical"))
+    return _unversioned(requested) in {_unversioned(i) for i in ids}
+
+
 def _worst(transcripts: list[dict[str, Any]], most_severe: str | None) -> dict[str, Any]:
     """The first member carrying ``most_severe``, else the highest-impact member."""
     for tc in transcripts:
@@ -228,11 +235,9 @@ def select_representative(
     """
     if not transcripts:
         return None
-    wanted = _unversioned(requested)
-    if wanted is not None:
+    if requested is not None:
         for tc in transcripts:
-            ids = (tc.get("transcript_id"), tc.get("mane_select"), tc.get("mane_plus_clinical"))
-            if wanted in {_unversioned(i) for i in ids}:
+            if names_transcript(tc, requested):
                 return tc
     pool = [
         tc for tc in transcripts if not set(tc.get("consequence_terms") or []) <= _FLANKING_TERMS
@@ -352,6 +357,12 @@ def build_annotation(
         "most_severe_consequence": vep_record.get("most_severe_consequence"),
         "gene_symbol": gene_symbol,
         "requested_transcript": requested,
+        # None when no transcript was requested; False = answered on another transcript.
+        "requested_transcript_matched": (
+            None
+            if requested is None
+            else representative is not None and names_transcript(representative, requested)
+        ),
         "position_scores": extract_position_scores(vep_record),
         "transcript_consequences": transcript_rows,
         "frequencies": extract_gnomad_frequencies(vep_record),
