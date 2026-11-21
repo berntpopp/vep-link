@@ -297,6 +297,53 @@ async def test_annotate_empty_vep_raises_not_found(
         await service.annotate("1-1000-A-T", GRCH38)
 
 
+def _protein_record(line: str, consequence: str, hgvsp: str | None) -> dict[str, Any]:
+    tc = {"gene_symbol": "FLT3", "consequence_terms": [consequence], "canonical": 1}
+    if hgvsp:
+        tc["hgvsp"] = hgvsp
+    return {"input": line, "most_severe_consequence": consequence, "transcript_consequences": [tc]}
+
+
+@pytest.mark.parametrize("query", ["FLT3:p.Asp835Tyr", "FLT3 p.D835Y", "FLT3 p.(Asp835Tyr)"])
+async def test_annotate_protein_input_puts_matching_allele_first(
+    service: VepService, client: FakeEnsemblClient, query: str
+) -> None:
+    # #136: the recoder sorts a UTR allele first; the one whose representative
+    # hgvsp is the requested change must lead, and the warning must name it.
+    client.recoder_get_return = [
+        {"input": query, "A": {"vcf_string": ["13-28003706-C-A", "13-28018505-C-A"]}}
+    ]
+    client.vep_region_post_return = [
+        _protein_record("13 28003706 . C A . . .", "3_prime_UTR_variant", None),
+        _protein_record(
+            "13 28018505 . C A . . .", "missense_variant", "ENSP00000241453.7:p.Asp835Tyr"
+        ),
+    ]
+    out = await service.annotate(query, GRCH38)
+    ids = [v["variant_id"] for v in out["variants"]]
+    assert ids == ["13-28018505-C-A", "13-28003706-C-A"]
+    warning = out["warnings"][0]
+    assert warning["code"] == "multiple_alts"
+    assert warning["context"]["matches_protein_change"] == "13-28018505-C-A"
+    assert warning["context"]["variants"] == ids
+    assert "13-28018505-C-A" in warning["message"]
+
+
+async def test_annotate_protein_input_without_match_keeps_order(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_return = [
+        {"input": "FLT3:p.D835H", "A": {"vcf_string": ["13-28003706-C-A", "13-28018505-C-A"]}}
+    ]
+    client.vep_region_post_return = [
+        _protein_record("13 28003706 . C A . . .", "3_prime_UTR_variant", None),
+        _protein_record("13 28018505 . C A . . .", "missense_variant", "ENSP1.7:p.Asp835Tyr"),
+    ]
+    out = await service.annotate("FLT3:p.D835H", GRCH38)
+    assert [v["variant_id"] for v in out["variants"]] == ["13-28003706-C-A", "13-28018505-C-A"]
+    assert "matches_protein_change" not in out["warnings"][0]["context"]
+
+
 # --- annotate_batch -------------------------------------------------------
 
 

@@ -23,17 +23,23 @@ __all__ = [
 ]
 
 
-def multiple_alts_warning(variants: list[str]) -> dict[str, Any]:
+def multiple_alts_warning(variants: list[str], *, matching: str | None = None) -> dict[str, Any]:
     """Signal that a single input resolved to several ALT alleles.
 
     All resolved alleles are returned in ``variants[]``; the warning makes the
     ambiguity explicit so the agent does not assume a single silent pick.
+    ``matching`` names the allele whose representative ``hgvsp`` is the
+    requested protein change (listed first, #136).
     """
-    return {
+    warning: dict[str, Any] = {
         "code": "multiple_alts",
         "message": f"Input maps to {len(variants)} ALT alleles; all are returned in variants[].",
         "context": {"count": len(variants), "variants": list(variants)},
     }
+    if matching is not None:
+        warning["message"] += f" {matching} carries the requested protein change and is first."
+        warning["context"]["matches_protein_change"] = matching
+    return warning
 
 
 def ref_not_validated_warning(*, expected: str, carried: str) -> dict[str, Any]:

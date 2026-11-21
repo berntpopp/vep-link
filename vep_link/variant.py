@@ -38,6 +38,18 @@ _CHR_PREFIX_RE = re.compile(r"^chr", re.IGNORECASE)
 # HGVS repeated-sequence count, e.g. ``GGGGCC[2]`` or ``[(145_?)]``.
 _HGVS_REPEAT_RE = re.compile(r"\[\(?(\d+|\?)(_(\d+|\?))?\)?\]")
 
+# "FLT3 p.Asp835Tyr" / "FLT3 p.(D835Y)": gene symbol, whitespace, p. change (#136).
+_GENE_SPACE_PROTEIN_RE = re.compile(r"^([A-Za-z][A-Za-z0-9-]*)\s+p\.\(?([^()\s]+?)\)?$")
+# The p. change of a "<seq>:p.<change>" HGVS, parentheses optional.
+_PROTEIN_CHANGE_RE = re.compile(r":p\.\(?([^()\s]+?)\)?$")
+_AA_THREE_TO_ONE = {
+    "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C", "Gln": "Q", "Glu": "E",
+    "Gly": "G", "His": "H", "Ile": "I", "Leu": "L", "Lys": "K", "Met": "M", "Phe": "F",
+    "Pro": "P", "Ser": "S", "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V", "Sec": "U",
+    "Pyl": "O", "Ter": "*",
+}  # fmt: skip
+_AA_THREE_RE = re.compile("|".join(_AA_THREE_TO_ONE))
+
 # CNV type -> the token VEP's region endpoint expects for a structural variant.
 _CNV_TYPE_TO_VEP = {
     "DEL": "deletion",
@@ -70,12 +82,26 @@ def clean_hgvs(text: str) -> str:
     parenthetical that precedes the ``:`` change separator, then trims.
     """
     t = text.strip()
+    # "GENE p.X" / "GENE p.(X)" -> "GENE:p.X", the form Variant Recoder accepts.
+    t = _GENE_SPACE_PROTEIN_RE.sub(r"\1:p.\2", t)
     # Drop a trailing protein annotation in parentheses, e.g. " (p.Arg1459*)".
     t = re.sub(r"\s*\(p\.[^)]*\)\s*$", "", t, flags=re.IGNORECASE)
     # Drop a gene name in parentheses between the transcript and the colon,
     # e.g. "NM_004006.2(DMD):c..." -> "NM_004006.2:c...".
     t = re.sub(r"\(([^)]*)\)(?=\s*:)", "", t)
     return t.strip()
+
+
+def protein_change(text: str) -> str | None:
+    """The one-letter p. change of a ``<seq>:p.<change>`` HGVS, else ``None``.
+
+    ``FLT3:p.Asp835Tyr`` and ``ENSP…:p.(D835Y)`` both give ``D835Y``, so a
+    3-letter and a 1-letter spelling of one change compare equal.
+    """
+    match = _PROTEIN_CHANGE_RE.search(text.strip())
+    if match is None:
+        return None
+    return _AA_THREE_RE.sub(lambda m: _AA_THREE_TO_ONE[m.group()], match.group(1))
 
 
 def _coordinate_tokens(text: str) -> tuple[str, int, str, str] | None:
