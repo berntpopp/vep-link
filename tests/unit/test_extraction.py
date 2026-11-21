@@ -305,6 +305,7 @@ def test_build_annotation_missense_shape() -> None:
         "strand": 1,
         "most_severe_consequence": "missense_variant",
         "gene_symbol": "GENE1",
+        "requested_transcript": None,
         "position_scores": {"cadd_phred": 25.1, "cadd_raw": 3.214, "conservation": 5.6},
         "transcript_consequences": flatten_consequences(MISSENSE),
         "frequencies": [{"allele": "T", "gnomade": 0.0001234, "gnomadg": 0.0002345}],
@@ -369,6 +370,7 @@ def test_build_annotation_keys_exact() -> None:
         "strand",
         "most_severe_consequence",
         "gene_symbol",
+        "requested_transcript",
         "position_scores",
         "transcript_consequences",
         "frequencies",
@@ -442,3 +444,39 @@ def test_build_annotation_hoists_position_scores() -> None:
 def test_build_annotation_intergenic_position_scores_empty() -> None:
     ann = build_annotation(INTERGENIC, variant_id="1-2000-C-G", assembly="GRCh38")
     assert ann["position_scores"] == {}
+
+
+def test_requested_transcript_parsed_from_hgvs() -> None:
+    from vep_link.services.extraction import requested_transcript
+
+    assert requested_transcript("NM_002834.5:c.1449T>G") == "NM_002834.5"
+    assert requested_transcript(" ENST00000351677.7:c.1449T>G") == "ENST00000351677.7"
+    assert requested_transcript("ENST00000692624.1(PTPN11):c.1381T>G") == "ENST00000692624.1"
+    assert requested_transcript("NC_000012.12:g.112489025T>G") is None
+    assert requested_transcript("12-112489025-T-G") is None
+    assert requested_transcript("rs143238917") is None
+
+
+def test_build_annotation_gene_symbol_follows_requested_transcript() -> None:
+    record = {
+        "most_severe_consequence": "splice_acceptor_variant",
+        "transcript_consequences": [
+            {
+                "transcript_id": "T_AS1",
+                "gene_symbol": "HNF1A-AS1",
+                "consequence_terms": ["splice_acceptor_variant"],
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "ENST00000257555",
+                "gene_symbol": "HNF1A",
+                "consequence_terms": ["missense_variant"],
+                "mane_select": "NM_000545.8",
+            },
+        ],
+    }
+    ann = build_annotation(
+        record, variant_id="12-1-G-A", assembly="GRCh38", query="NM_000545.8:c.1A>G"
+    )
+    assert ann["gene_symbol"] == "HNF1A"
+    assert ann["requested_transcript"] == "NM_000545.8"
