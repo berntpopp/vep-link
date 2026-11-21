@@ -98,7 +98,7 @@ def protein_change(text: str) -> str | None:
     ``FLT3:p.Asp835Tyr`` and ``ENSP…:p.(D835Y)`` both give ``D835Y``, so a
     3-letter and a 1-letter spelling of one change compare equal.
     """
-    match = _PROTEIN_CHANGE_RE.search(text.strip())
+    match = _PROTEIN_CHANGE_RE.search(text.strip().replace("%3D", "="))  # VEP escapes "="
     if match is None:
         return None
     return _AA_THREE_RE.sub(lambda m: _AA_THREE_TO_ONE[m.group()], match.group(1))

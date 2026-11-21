@@ -329,6 +329,21 @@ async def test_annotate_protein_input_puts_matching_allele_first(
     assert "13-28018505-C-A" in warning["message"]
 
 
+async def test_resolve_protein_input_puts_matching_allele_first(
+    service: VepService, client: FakeEnsemblClient
+) -> None:
+    client.recoder_get_return = [
+        {"input": "FLT3:p.D835Y", "A": {"vcf_string": ["13-28003706-C-A", "13-28018505-C-A"]}}
+    ]
+    client.vep_region_post_return = [
+        _protein_record("13 28003706 . C A . . .", "3_prime_UTR_variant", None),
+        _protein_record("13 28018505 . C A . . .", "missense_variant", "ENSP1.7:p.Asp835Tyr"),
+    ]
+    out = await service.resolve("FLT3:p.D835Y", GRCH38)
+    assert [v["variant_id"] for v in out["variants"]] == ["13-28018505-C-A", "13-28003706-C-A"]
+    assert out["warnings"][0]["context"]["matches_protein_change"] == "13-28018505-C-A"
+
+
 async def test_annotate_protein_input_without_match_keeps_order(
     service: VepService, client: FakeEnsemblClient
 ) -> None:

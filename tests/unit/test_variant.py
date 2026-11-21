@@ -303,6 +303,7 @@ def test_gene_space_protein_change_normalised(text: str, expected: str) -> None:
         ("FLT3:p.(D835Y)", "D835Y"),
         ("ENSP00000241453.7:p.Asp835Tyr", "D835Y"),
         ("ENSP1:p.Arg97ProfsTer23", "R97Pfs*23"),
+        ("ENSP1:p.Leu12%3D", "L12="),  # VEP URI-escapes "=" in hgvsp
         ("NM_004006.2:c.4375C>T", None),
         ("1-1000-A-T", None),
     ],

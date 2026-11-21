@@ -243,31 +243,28 @@ class VepService:
         by_line: dict[str, dict] = {
             line: rec for rec in records if isinstance((line := rec.get("input")), str)
         }
-        variants: list[dict] = []
-        annotations: list[dict] = []
-        for canonical, line in pairs:
-            record = by_line.get(line)
-            if record is None:
-                continue
-            ann = build_annotation(
-                record, variant_id=canonical, assembly=build.value, query=variant
+        annotations = [
+            build_annotation(
+                by_line[line], variant_id=canonical, assembly=build.value, query=variant
             )
-            annotations.append(ann)
-            variants.append(
-                {
-                    "variant_id": ann["variant_id"],
-                    "assembly": ann["assembly"],
-                    "gene_symbol": ann["gene_symbol"],
-                    "most_severe_consequence": ann["most_severe_consequence"],
-                }
-            )
-        if not variants:
+            for canonical, line in pairs
+            if line in by_line
+        ]
+        if not annotations:
             raise DataNotFoundError(f"No VEP annotation found for {variant!r}")
+        annotations, matching = _protein_match_first(variant, annotations)
+        variants = [
+            {
+                k: ann[k]
+                for k in ("variant_id", "assembly", "gene_symbol", "most_severe_consequence")
+            }
+            for ann in annotations
+        ]
         return {
             "query": variant,
             "assembly": build.value,
             "variants": variants,
-            "warnings": _alt_warnings([c for c, _ in pairs])
+            "warnings": _alt_warnings([v["variant_id"] for v in variants], matching)
             + path_warnings
             + _transcript_warnings(annotations),
         }
