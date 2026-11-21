@@ -72,6 +72,8 @@ _POSITION_FIELDS: tuple[str, ...] = (
 _TRANSCRIPT_FIELDS: tuple[str, ...] = (
     "gene_symbol",
     "transcript_id",
+    "mane_select",
+    "mane_plus_clinical",
     "consequence_terms",
     "impact",
     "hgvsc",
@@ -103,18 +105,17 @@ _INFORMATIVE_IMPACTS: frozenset[str] = frozenset({"HIGH", "MODERATE", "LOW"})
 
 
 def pick_representative_transcript(
-    transcripts: list[dict[str, Any]], most_severe: str | None = None
+    transcripts: list[dict[str, Any]],
+    most_severe: str | None = None,
+    requested: str | None = None,
 ) -> dict[str, Any] | None:
     """Return the single most relevant transcript, or ``None``.
 
-    Consequence-anchored: when ``most_severe`` is given, the pick is filtered to
-    transcripts carrying that consequence before applying the biological ranking
-    (``pick == 1`` > MANE > ``canonical == 1`` > first); with ``most_severe`` None
-    it ranks over all. Delegates to
-    :func:`vep_link.services.extraction.select_representative` so the compact tier
-    and ``build_annotation`` share one selection path.
+    The requested transcript, else MANE/canonical over overlapping transcripts
+    (see :func:`vep_link.services.extraction.select_representative`, shared with
+    ``build_annotation`` so ``gene_symbol`` and the compact tier agree).
     """
-    return select_representative(transcripts, most_severe)
+    return select_representative(transcripts, most_severe, requested)
 
 
 def _project_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
@@ -169,12 +170,25 @@ def _identity_with_position(data: dict[str, Any]) -> dict[str, Any]:
 def _compact(data: dict[str, Any]) -> dict[str, Any]:
     """Project to the ``compact`` tier (the default)."""
     shaped = _identity_with_position(data)
+    most_severe = data.get("most_severe_consequence")
+    transcripts = data.get("transcript_consequences") or []
     representative = pick_representative_transcript(
-        data.get("transcript_consequences") or [], data.get("most_severe_consequence")
+        transcripts, most_severe, data.get("requested_transcript")
     )
     shaped["representative_transcript"] = (
         _project_transcript(representative) if representative is not None else None
     )
+    if representative is not None and most_severe not in (
+        representative.get("consequence_terms") or []
+    ):
+        # Name where the worst consequence lives so it is never read off the wrong transcript.
+        worst = next(
+            (tc for tc in transcripts if most_severe in (tc.get("consequence_terms") or [])), None
+        )
+        if worst is not None:
+            shaped["most_severe_transcript"] = {
+                k: worst[k] for k in ("transcript_id", "gene_symbol", "hgvsp") if worst.get(k)
+            }
     shaped["frequencies"] = data.get("frequencies", [])
     return shaped
 
@@ -183,7 +197,7 @@ def _compact(data: dict[str, Any]) -> dict[str, Any]:
 # the transcript identity itself). Collapsing rows equal on ALL of these is
 # loss-free: any difference in hgvsc/protein_position/etc. keeps the rows split.
 _COLLAPSE_SIGNATURE_FIELDS: tuple[str, ...] = tuple(
-    f for f in _TRANSCRIPT_FIELDS if f != "transcript_id"
+    f for f in _TRANSCRIPT_FIELDS if f not in ("transcript_id", "mane_select", "mane_plus_clinical")
 )
 
 

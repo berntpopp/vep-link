@@ -17,12 +17,14 @@ import re
 from typing import Any
 
 from vep_link.mcp.untrusted_content import FENCED_FIELDS, fence_untrusted_text
+from vep_link.models.enums import impact_rank
 
 __all__ = [
     "flatten_consequences",
     "most_severe_transcript",
     "prioritize_transcript",
     "select_representative",
+    "requested_transcript",
     "extract_gnomad_frequencies",
     "extract_position_scores",
     "build_annotation",
@@ -47,6 +49,7 @@ _PASSTHROUGH_FIELDS: tuple[str, ...] = (
     "mane",
     "pick",
     "mane_select",
+    "mane_plus_clinical",
     "hgvsc",
     "hgvsp",
     "amino_acids",
@@ -185,24 +188,66 @@ def prioritize_transcript(transcripts: list[dict[str, Any]]) -> dict[str, Any] |
     return _rank_biological(transcripts)
 
 
-def select_representative(
-    transcripts: list[dict[str, Any]], most_severe: str | None
-) -> dict[str, Any] | None:
-    """Representative transcript anchored on the most-severe consequence.
+# A transcript carrying only these terms does not overlap the variant (a flanking gene).
+_FLANKING_TERMS = frozenset({"upstream_gene_variant", "downstream_gene_variant"})
+_REQUESTED_TRANSCRIPT_RE = re.compile(
+    r"^\s*((?:NM|NR|XM|XR)_\d+(?:\.\d+)?|ENST\d+(?:\.\d+)?)(?:\([^)]*\))?:"
+)
 
-    Filters to transcripts whose ``consequence_terms`` include ``most_severe``,
-    then applies the biological ranking within that subset. Falls back to ranking
-    over all transcripts when the subset is empty (or ``most_severe`` is None), so
-    the returned gene always carries the reported worst consequence when one
-    exists. Returns ``None`` for an empty list.
+
+def requested_transcript(query: str) -> str | None:
+    """The transcript accession a transcript-level HGVS input names, else ``None``."""
+    match = _REQUESTED_TRANSCRIPT_RE.match(query)
+    return match.group(1) if match else None
+
+
+def _unversioned(accession: Any) -> str | None:
+    return accession.split(".", 1)[0] if isinstance(accession, str) else None
+
+
+def _worst(transcripts: list[dict[str, Any]], most_severe: str | None) -> dict[str, Any]:
+    """The first member carrying ``most_severe``, else the highest-impact member."""
+    for tc in transcripts:
+        if most_severe is not None and most_severe in (tc.get("consequence_terms") or []):
+            return tc
+    return max(transcripts, key=lambda tc: impact_rank(tc.get("impact") or ""))
+
+
+def select_representative(
+    transcripts: list[dict[str, Any]], most_severe: str | None, requested: str | None = None
+) -> dict[str, Any] | None:
+    """The transcript a caller should read the variant on (#133).
+
+    The ``requested`` transcript (matched on its Ensembl id or its MANE RefSeq
+    accession, version-insensitive) wins. Otherwise, over transcripts that overlap
+    the variant (flanking up/downstream genes dropped): ``pick == 1`` > MANE
+    Select > MANE Plus Clinical > ``canonical == 1`` > any, and within the first
+    non-empty tier the one carrying ``most_severe`` (else the highest impact). The
+    most severe consequence alone never picks an NMD/alternate isoform over the
+    clinical transcript. Returns ``None`` for an empty list.
     """
     if not transcripts:
         return None
-    if most_severe is not None:
-        subset = [tc for tc in transcripts if most_severe in (tc.get("consequence_terms") or [])]
-        if subset:
-            return _rank_biological(subset)
-    return _rank_biological(transcripts)
+    wanted = _unversioned(requested)
+    if wanted is not None:
+        for tc in transcripts:
+            ids = (tc.get("transcript_id"), tc.get("mane_select"), tc.get("mane_plus_clinical"))
+            if wanted in {_unversioned(i) for i in ids}:
+                return tc
+    pool = [
+        tc for tc in transcripts if not set(tc.get("consequence_terms") or []) <= _FLANKING_TERMS
+    ] or transcripts
+    tiers = (
+        lambda tc: tc.get("pick") == 1,
+        lambda tc: tc.get("mane_select") is not None or "MANE_Select" in (tc.get("mane") or []),
+        lambda tc: tc.get("mane_plus_clinical") is not None,
+        lambda tc: tc.get("canonical") == 1,
+    )
+    for in_tier in tiers:
+        members = [tc for tc in pool if in_tier(tc)]
+        if members:
+            return _worst(members, most_severe)
+    return _worst(pool, most_severe)
 
 
 def extract_gnomad_frequencies(vep_record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -274,23 +319,24 @@ def _clean_colocated(colocated: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_annotation(
-    vep_record: dict[str, Any], *, variant_id: str, assembly: str
+    vep_record: dict[str, Any], *, variant_id: str, assembly: str, query: str = ""
 ) -> dict[str, Any]:
     """Shape a raw VEP record into the normalized annotation dict.
 
     The returned shape is the contract consumed by the service and
-    response-shaping layers. ``gene_symbol`` is taken from the consequence-anchored
-    representative transcript (see :func:`select_representative`), so it always
-    names a gene on which ``most_severe_consequence`` occurs -- even on a
-    contiguous-gene locus where the canonical transcript is a neighbour gene.
+    response-shaping layers. ``gene_symbol`` is taken from the representative
+    transcript (see :func:`select_representative`): the transcript ``query`` names,
+    else MANE/canonical among transcripts overlapping the variant, so a flanking
+    neighbour gene never names the variant.
     """
     vep_record = {
         **vep_record,
         "colocated_variants": _clean_colocated(vep_record.get("colocated_variants") or []),
     }
     transcript_rows = flatten_consequences(vep_record)
+    requested = requested_transcript(query)
     representative = select_representative(
-        transcript_rows, vep_record.get("most_severe_consequence")
+        transcript_rows, vep_record.get("most_severe_consequence"), requested
     )
     gene_symbol = representative.get("gene_symbol") if representative is not None else None
 
@@ -305,6 +351,7 @@ def build_annotation(
         "strand": vep_record.get("strand"),
         "most_severe_consequence": vep_record.get("most_severe_consequence"),
         "gene_symbol": gene_symbol,
+        "requested_transcript": requested,
         "position_scores": extract_position_scores(vep_record),
         "transcript_consequences": transcript_rows,
         "frequencies": extract_gnomad_frequencies(vep_record),

@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-21
+
+### Fixed
+
+- `annotate_variant` (compact) no longer reads the variant off the most-severe isoform (#133). The
+  `representative_transcript` (and the top-level `gene_symbol`) is now the transcript the HGVS input
+  names (Ensembl id or MANE RefSeq accession, version-insensitive), else MANE Select > MANE Plus
+  Clinical > canonical among transcripts overlapping the variant; flanking up/downstream genes are
+  never picked. `NM_002834.5:c.1449T>G` now returns the synonymous change on the MANE transcript
+  instead of a missense on an NMD isoform, and an antisense lncRNA splice term no longer hides the
+  coding missense and its REVEL score. `most_severe_consequence` is unchanged; when it is on another
+  transcript, a new `most_severe_transcript` (`transcript_id`, `gene_symbol`, `hgvsp`) names it.
+  Transcript rows now carry `mane_select` / `mane_plus_clinical` accessions.
+
 ## [1.2.3] - 2026-11-20
 
 ### Fixed

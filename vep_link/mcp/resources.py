@@ -196,11 +196,16 @@ _NOTES = [
         "ref_not_validated warning. See warning_codes."
     ),
     (
-        "v0.3: gene_symbol and the compact representative_transcript are anchored on "
-        "most_severe_consequence (they always describe the variant's worst effect, even "
-        "on contiguous-gene loci). recode_variant echoes the caller's input per result "
+        "v0.3: recode_variant echoes the caller's input per result "
         "and honors the fields filter. _meta.timing now carries upstream_ms and "
         "cache_status (miss|hit|coalesced) alongside elapsed_ms."
+    ),
+    (
+        "v1.2.4: gene_symbol and the compact representative_transcript are the transcript "
+        "the HGVS input names, else MANE Select > MANE Plus Clinical > canonical among "
+        "transcripts overlapping the variant -- not the most severe isoform. When "
+        "most_severe_consequence lies on another transcript, most_severe_transcript names "
+        "it; read the consequence off representative_transcript."
     ),
 ]
 

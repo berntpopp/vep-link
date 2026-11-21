@@ -307,8 +307,11 @@ requested via `vep_options` and are returned under their native VEP keys in
 | `standard` | identity/position + `position_scores` + `transcript_consequences` (each projected and null-stripped) + `frequencies`. By default (`transcripts="auto"`) uninformative MODIFIER neighbour transcripts are dropped and the list is capped to the most severe `max_transcripts`; `_meta.transcripts` then reports `{shown, total}`. Pass `transcripts="all"` for every isoform. |
 | `full` | the entire normalized annotation, including all transcripts, `position_scores`, `colocated_variants`, and `strand`. |
 
-Transcript prioritization (for `representative_transcript`): `pick == 1` > MANE >
-`canonical == 1` > first. A transcript is **uninformative** (and dropped from the
+Transcript prioritization (for `representative_transcript` and `gene_symbol`): the
+transcript the HGVS input names (Ensembl id or MANE RefSeq accession), else, over
+transcripts overlapping the variant, `pick == 1` > MANE Select > MANE Plus Clinical >
+`canonical == 1` > any (the most severe within the tier). When `most_severe_consequence`
+is on another transcript, compact adds `most_severe_transcript` naming it. A transcript is **uninformative** (and dropped from the
 `standard` auto view) when its impact is `MODIFIER` and it carries no
 substitution signal (no HGVS, SIFT/PolyPhen, REVEL, or AlphaMissense) — e.g. an
 `upstream_gene_variant` on a flanking gene.

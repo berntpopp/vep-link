@@ -29,6 +29,8 @@ DATA = build_annotation(VEP_REGION_MISSENSE[0], variant_id="1-1000-A-T", assembl
 _REP_KEYS = {
     "gene_symbol",
     "transcript_id",
+    "mane_select",
+    "mane_plus_clinical",
     "consequence_terms",
     "impact",
     "hgvsc",
@@ -135,7 +137,7 @@ def test_compact_representative_transcript() -> None:
     assert rep is not None
     # Fully-populated transcript -> carries the whole projected key set; CADD is
     # no longer per-transcript (it is hoisted to position_scores).
-    assert set(rep.keys()) == _REP_KEYS
+    assert set(rep.keys()) == _REP_KEYS - {"mane_plus_clinical"}  # fixture has none
     assert rep["gene_symbol"] == "GENE1"
     assert "cadd_phred" not in rep
     assert rep["transcript_id"] == "ENST00000123456"
@@ -493,3 +495,91 @@ def test_string_mode_full_matches_enum() -> None:
 def test_invalid_string_mode_raises() -> None:
     with pytest.raises(ValueError):
         shape_annotation(DATA, "bogus")
+
+
+# --- #133: representative = requested / MANE transcript, not the most severe ---
+
+
+def _ptpn11_data(**extra: Any) -> dict[str, Any]:
+    # NM_002834.5:c.1449T>G: synonymous on MANE, missense only on an NMD isoform.
+    return {
+        "variant_id": "12-112489025-T-G",
+        "assembly": "GRCh38",
+        "most_severe_consequence": "missense_variant",
+        "transcript_consequences": [
+            {
+                "transcript_id": "ENST00000351677",
+                "gene_symbol": "PTPN11",
+                "consequence_terms": ["splice_region_variant", "synonymous_variant"],
+                "impact": "LOW",
+                "hgvsp": "ENSP00000340944.3:p.Gly483=",
+                "mane_select": "NM_002834.5",
+                "mane": ["MANE_Select"],
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "ENST00000692624",
+                "gene_symbol": "PTPN11",
+                "consequence_terms": [
+                    "missense_variant",
+                    "splice_region_variant",
+                    "NMD_transcript_variant",
+                ],
+                "impact": "MODERATE",
+                "hgvsp": "ENSP00000508953.1:p.Cys461Gly",
+            },
+        ],
+        **extra,
+    }
+
+
+def test_compact_representative_is_mane_not_most_severe_isoform() -> None:
+    shaped = shape_annotation(_ptpn11_data(), "compact")
+    rep = shaped["representative_transcript"]
+    assert rep["transcript_id"] == "ENST00000351677"
+    assert rep["mane_select"] == "NM_002834.5"
+    assert "synonymous_variant" in rep["consequence_terms"]
+    # The worst consequence is still reported, and named with its transcript.
+    assert shaped["most_severe_consequence"] == "missense_variant"
+    assert shaped["most_severe_transcript"]["transcript_id"] == "ENST00000692624"
+
+
+def test_compact_representative_honours_requested_transcript() -> None:
+    shaped = shape_annotation(_ptpn11_data(requested_transcript="ENST00000692624.1"), "compact")
+    assert shaped["representative_transcript"]["transcript_id"] == "ENST00000692624"
+    assert "most_severe_transcript" not in shaped
+
+
+def test_compact_requested_refseq_matches_mane_accession() -> None:
+    shaped = shape_annotation(_ptpn11_data(requested_transcript="NM_002834.5"), "compact")
+    assert shaped["representative_transcript"]["transcript_id"] == "ENST00000351677"
+
+
+def test_compact_antisense_splice_does_not_hide_coding_missense() -> None:
+    data = {
+        "variant_id": "12-120978847-G-A",
+        "assembly": "GRCh38",
+        "most_severe_consequence": "splice_acceptor_variant",
+        "transcript_consequences": [
+            {
+                "transcript_id": "ENST_AS1",
+                "gene_symbol": "HNF1A-AS1",
+                "consequence_terms": ["splice_acceptor_variant", "non_coding_transcript_variant"],
+                "impact": "HIGH",
+                "canonical": 1,
+            },
+            {
+                "transcript_id": "ENST00000257555",
+                "gene_symbol": "HNF1A",
+                "consequence_terms": ["missense_variant"],
+                "impact": "MODERATE",
+                "revel": 0.9,
+                "mane_select": "NM_000545.8",
+                "canonical": 1,
+            },
+        ],
+    }
+    shaped = shape_annotation(data, "compact")
+    assert shaped["representative_transcript"]["gene_symbol"] == "HNF1A"
+    assert shaped["representative_transcript"]["revel"] == 0.9
+    assert shaped["most_severe_transcript"]["gene_symbol"] == "HNF1A-AS1"

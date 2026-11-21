@@ -205,7 +205,9 @@ class VepService:
             record = by_line.get(line)
             if record is None:
                 continue
-            ann = build_annotation(record, variant_id=canonical, assembly=build.value)
+            ann = build_annotation(
+                record, variant_id=canonical, assembly=build.value, query=variant
+            )
             variants.append(
                 {
                     "variant_id": ann["variant_id"],
@@ -251,7 +253,9 @@ class VepService:
             line: rec for rec in records if isinstance((line := rec.get("input")), str)
         }
         variants = [
-            build_annotation(by_line[line], variant_id=canonical, assembly=build.value)
+            build_annotation(
+                by_line[line], variant_id=canonical, assembly=build.value, query=variant
+            )
             for canonical, line in pairs
             if line in by_line
         ]
