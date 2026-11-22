@@ -24,6 +24,7 @@ from vep_link.config import Settings
 from vep_link.exceptions import (
     EnsemblApiError,
     RateLimitedError,
+    UpstreamBlockedError,
     UpstreamInputError,
     UpstreamTimeoutError,
 )
@@ -188,10 +189,10 @@ async def test_404_raises_input_error_without_retry(client: BaseHTTPClient) -> N
 
 
 @respx.mock
-async def test_other_4xx_raises_input_error(client: BaseHTTPClient) -> None:
-    respx.get(URL).mock(return_value=httpx.Response(403))
+async def test_other_4xx_is_not_input_error(client: BaseHTTPClient) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(401))
     try:
-        with pytest.raises(UpstreamInputError):
+        with pytest.raises(UpstreamBlockedError):
             await client.get_json(URL)
     finally:
         await client.aclose()

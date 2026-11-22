@@ -67,6 +67,7 @@ from vep_link.exceptions import (
     RateLimitedError,
     ResponseTooLargeError,
     UnsupportedContigError,
+    UpstreamBlockedError,
     UpstreamInputError,
     UpstreamTimeoutError,
     VariantParseError,
@@ -105,6 +106,7 @@ ERROR_SUBCODES: tuple[str, ...] = (
     "unsupported_input",
     "build_mismatch",
     "upstream_timeout",
+    "upstream_blocked",
     "output_validation_failed",
 )
 
@@ -193,6 +195,13 @@ _EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str | None, str], ...] = (
         # NB: a healthy VEP call can legitimately take ~44s; a timeout here means the
         # request exceeded the server's own deadline, not merely that it was slow.
         "Upstream timed out; retry shortly (VEP calls can legitimately take ~40s).",
+    ),
+    (
+        UpstreamBlockedError,
+        "upstream_unavailable",
+        "upstream_blocked",
+        "Ensembl is refusing requests from this server (HTTP 401/403); the input is fine, "
+        "do not reformulate it. Retry much later.",
     ),
     (
         EnsemblApiError,
@@ -481,7 +490,12 @@ async def run_mcp_tool(
         meta["unsafe_for_clinical_use"] = True
         elapsed_ms = _stamp_elapsed(result, start)
     METRICS.record_tool_call(ctx.tool_name, outcome="success", code=None, elapsed_ms=elapsed_ms)
-    log_tool_call(ctx.tool_name, outcome="success", elapsed_ms=elapsed_ms)
+    log_tool_call(
+        ctx.tool_name,
+        outcome="success",
+        elapsed_ms=elapsed_ms,
+        cache_status=get_cache_status(),
+    )
     return result
 
 
@@ -528,6 +542,7 @@ def _finalize_error(
         elapsed_ms=elapsed_ms,
         error_code=code,
         error_subcode=envelope.get("error_subcode"),
+        cache_status=get_cache_status(),
         exc_type=type(exc).__name__ if exc is not None else None,
         upstream_status=_upstream_status(exc),
     )

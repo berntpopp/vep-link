@@ -725,7 +725,8 @@ async def test_batch_of_200_slow_recodes_returns_partial_results_within_deadline
     assert result["summary"]["annotated"] + result["summary"]["failed"] == 200
     late = [e for e in result["errors"] if e.get("error_subcode") == "upstream_timeout"]
     assert late and all(e["error_code"] == "upstream_unavailable" for e in late)
-    assert 1 < peak <= fast.MAX_CONCURRENCY
+    # Every input starts at once so the client can coalesce them into one POST (#130).
+    assert peak == 200
     assert in_flight == 0  # nothing left running after the deadline
 
 

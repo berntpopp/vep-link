@@ -238,16 +238,33 @@ limits:
   (`VEP_LINK_MAX_CONCURRENCY`, default 5); waiting past
   `VEP_LINK_QUEUE_WAIT_TIMEOUT` (default 20 s) yields fast backpressure surfaced
   as `rate_limited`.
-- Retryable failures (HTTP 429/500/502/503/504 and transport errors) are retried
+- Retryable failures (HTTP 408/429/500/502/503/504 and transport errors) are retried
   with jittered exponential backoff (`VEP_LINK_BACKOFF_BASE_SECONDS` 1.0 →
   `VEP_LINK_BACKOFF_MAX_SECONDS` 20.0, up to `VEP_LINK_MAX_RETRIES` 4 attempts).
-- On HTTP 429 the upstream `Retry-After` header is honored.
+- On HTTP 429 the upstream `Retry-After` header is honored. A backoff or
+  `Retry-After` longer than the call's remaining deadline is not slept; the call
+  fails at once.
 - Batch POSTs are chunked at `VEP_LINK_CHUNK_SIZE` (200) variants with a
   `VEP_LINK_INTER_CHUNK_DELAY_MS` (100 ms) politeness delay.
+- Concurrent single calls (and every input of `annotate_variants_batch`) are
+  coalesced: lookups arriving within `VEP_LINK_COALESCE_WINDOW_MS` (50 ms) share
+  one VEP region / Variant Recoder POST of up to 200 variants.
+- A client-side rate limit (`VEP_LINK_RATE_LIMIT_PER_SECOND` 8/s per host, burst
+  `VEP_LINK_RATE_LIMIT_BURST` 4) keeps well under Ensembl's 15 req/s. It honours
+  `Retry-After` and `X-RateLimit-Remaining`/`-Reset`. A call whose wait would
+  outlast its deadline fails fast as `rate_limited`.
+- HTTP 401/403 (Ensembl refusing this deployment) is never retried; it is reported
+  as `upstream_unavailable` with subcode `upstream_blocked`, not `invalid_input`.
+  Only 400/404/410/422 mean bad input; any other 4xx is `upstream_unavailable`,
+  and a terminal 408 is `upstream_unavailable` / `upstream_timeout`.
+- Every upstream attempt logs one `ensembl_request` line (host, endpoint, batch
+  size, attempt, status, elapsed_ms, and the `rate_wait_ms` / `slot_wait_ms` spent
+  waiting on the rate limit and a concurrency slot); variant values are never logged.
 
 If retries are exhausted, the tool returns a structured error envelope:
 `rate_limited` (429 after retries) or `upstream_unavailable` (5xx / transport
-error / timeout; a timeout carries subcode `upstream_timeout`). These are
+error / timeout; a timeout carries subcode `upstream_timeout`, a 401/403 carries
+`upstream_blocked`). These are
 retryable — back off and retry, or
 reduce parallelism. Treat live Ensembl rate limits as upstream state, not a local
 failure.
