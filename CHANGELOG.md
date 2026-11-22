@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-22
+
 ### Changed
 
 - Fewer, politer Ensembl requests (#130). Concurrent single-variant VEP region and
@@ -16,12 +18,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A client-side token bucket per Ensembl host (`VEP_LINK_RATE_LIMIT_PER_SECOND` 8/s,
   `VEP_LINK_RATE_LIMIT_BURST` 4) honours `Retry-After` and `X-RateLimit-Remaining`/`-Reset`.
 - One `ensembl_request` log line per upstream attempt (host, endpoint, batch size,
-  status, elapsed ms; no variant values); `mcp_tool_call` lines now carry `cache_status`.
+  status, elapsed ms, and the `rate_wait_ms` / `slot_wait_ms` spent on the rate limit
+  and a concurrency slot; no variant values); `mcp_tool_call` lines now carry
+  `cache_status`.
+- A backoff or `Retry-After` sleep longer than the call's remaining deadline is no
+  longer slept; the call fails at once with the same error it would have hit.
 
 ### Fixed
 
-- An Ensembl HTTP 403 is no longer reported as `invalid_input` (#129): it is
+- An Ensembl HTTP 401 or 403 is no longer reported as `invalid_input` (#129): it is
   `upstream_unavailable` with the new subcode `upstream_blocked`, and is not retried.
+  Only 400/404/410/422 mean bad input; any other 4xx is `upstream_unavailable`, and
+  408 is retried like a timeout (terminal: `upstream_timeout`).
 
 ## [1.2.6] - 2026-11-21
 

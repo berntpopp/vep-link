@@ -200,7 +200,7 @@ _EXCEPTION_MAP: tuple[tuple[type[VepLinkError], str, str | None, str], ...] = (
         UpstreamBlockedError,
         "upstream_unavailable",
         "upstream_blocked",
-        "Ensembl is refusing requests from this server (HTTP 403); the input is fine, "
+        "Ensembl is refusing requests from this server (HTTP 401/403); the input is fine, "
         "do not reformulate it. Retry much later.",
     ),
     (

@@ -26,6 +26,7 @@ from vep_link.exceptions import (
     RateLimitedError,
     UpstreamBlockedError,
     UpstreamInputError,
+    UpstreamTimeoutError,
 )
 from vep_link.mcp.errors import canonical_error_code
 from vep_link.models.enums import GenomeBuild
@@ -41,6 +42,10 @@ GRCH38 = GenomeBuild.GRCH38
 def fast(settings: Settings) -> Settings:
     """No client-side rate limit, so request counts are the only thing measured."""
     return settings.model_copy(update={"RATE_LIMIT_PER_SECOND": 0.0})
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
 
 
 def _vep_echo(posted: list[str]) -> list[dict[str, Any]]:
@@ -295,6 +300,119 @@ async def test_403_is_an_upstream_block_not_invalid_input(settings: Settings) ->
         await http.aclose()
     assert route.call_count == 1  # never retried
     assert canonical_error_code(info.value) == ("upstream_unavailable", "upstream_blocked")
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("annotate_variant", {"variant": "1-169549811-C-T"}),
+        ("resolve_variant", {"variant": "rs6025"}),
+        (
+            "liftover_variant",
+            {"variant": "1-169519049-T-C", "from_assembly": "GRCh37", "to_assembly": "GRCh38"},
+        ),
+    ],
+)
+async def test_403_reaches_each_tool_as_upstream_blocked(tool: str, args: dict) -> None:
+    """Acceptance (#129): resolve, annotate and liftover never tell the caller to reword."""
+    from tests.unit.test_tools import structured
+    from vep_link.mcp.facade import create_vep_mcp
+
+    respx.route(host__regex=r"rest\.ensembl\.org$").mock(return_value=httpx.Response(403))
+    cfg = Settings(MAX_RETRIES=0, RATE_LIMIT_PER_SECOND=0.0)
+    client = EnsemblClient(cfg)
+    svc = VepService(client, cfg)
+    try:
+        data = structured(await create_vep_mcp(service_factory=lambda: svc).call_tool(tool, args))
+    finally:
+        await client.aclose()
+    assert (data["error_code"], data["error_subcode"]) == (
+        "upstream_unavailable",
+        "upstream_blocked",
+    )
+    assert data["recovery_action"] != "reformulate_input"
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [401, 405, 413, 418])
+async def test_unexpected_4xx_is_never_invalid_input(settings: Settings, status: int) -> None:
+    """Only 400/404/410/422 mean bad input; 401 is a refusal, others an upstream fault."""
+    http = BaseHTTPClient(settings)
+    route = respx.get(REGION_URL).mock(return_value=httpx.Response(status))
+    try:
+        with pytest.raises(EnsemblApiError) as info:
+            await http.get_json(REGION_URL)
+    finally:
+        await http.aclose()
+    assert route.call_count == 1  # deterministic: not retried
+    assert canonical_error_code(info.value)[0] == "upstream_unavailable"
+    if status == 401:
+        assert isinstance(info.value, UpstreamBlockedError)
+
+
+@respx.mock
+async def test_408_is_retried_then_a_timeout(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    http = BaseHTTPClient(settings.model_copy(update={"RATE_LIMIT_PER_SECOND": 0.0}))
+    monkeypatch.setattr(http, "_sleep", _no_sleep)
+    route = respx.get(REGION_URL).mock(return_value=httpx.Response(408))
+    try:
+        with pytest.raises(UpstreamTimeoutError):
+            await http.get_json(REGION_URL)
+    finally:
+        await http.aclose()
+    assert route.call_count == settings.MAX_RETRIES + 1
+
+
+@respx.mock
+async def test_retry_after_beyond_the_deadline_fails_fast(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Retry-After (or backoff) longer than the remaining budget is not slept."""
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    cfg = settings.model_copy(
+        update={"RATE_LIMIT_PER_SECOND": 0.0, "OVERALL_DEADLINE_SECONDS": 5.0}
+    )
+    http = BaseHTTPClient(cfg)
+    monkeypatch.setattr(http, "_sleep", record)
+    route = respx.get(REGION_URL).mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "600"})
+    )
+    try:
+        with pytest.raises(RateLimitedError):
+            await http.get_json(REGION_URL)
+    finally:
+        await http.aclose()
+    assert route.call_count == 1
+    assert all(s < 5.0 for s in slept)
+
+
+@respx.mock
+async def test_request_log_carries_slot_and_rate_waits(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lines: list[tuple[str, dict[str, Any]]] = []
+
+    class _Log:
+        def info(self, event: str, **kw: Any) -> None:
+            lines.append((event, kw))
+
+    monkeypatch.setattr("vep_link.api.base_client._upstream_log", _Log())
+    http = BaseHTTPClient(settings)
+    respx.get(REGION_URL).mock(return_value=httpx.Response(200, json=[]))
+    try:
+        await http.get_json(REGION_URL)
+    finally:
+        await http.aclose()
+    ((event, kw),) = lines
+    assert event == "ensembl_request"
+    assert isinstance(kw["slot_wait_ms"], int) and isinstance(kw["rate_wait_ms"], int)
 
 
 # --- config + logging ---------------------------------------------------------

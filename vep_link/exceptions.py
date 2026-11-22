@@ -55,7 +55,7 @@ class EnsemblApiError(VepLinkError):
 
 
 class UpstreamBlockedError(EnsemblApiError):
-    """Ensembl refused this deployment (HTTP 403, e.g. a volume block). NOT retried.
+    """Ensembl refused this deployment (HTTP 401/403, e.g. a volume block). NOT retried.
 
     Maps to canonical ``upstream_unavailable`` (subcode ``upstream_blocked``), never
     ``invalid_input``: rewording a correct variant cannot help (#129).

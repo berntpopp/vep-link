@@ -5,12 +5,14 @@ and guarded by an :class:`asyncio.Semaphore` so a fan-out of concurrent calls
 cannot overwhelm the upstream (or get the whole process rate-limited). Each
 request runs through a jittered exponential-backoff retry loop that:
 
-- retries transient transport faults and ``{429, 500, 502, 503, 504}`` statuses;
+- retries transient transport faults and ``{408, 429, 500, 502, 503, 504}`` statuses;
 - honors ``Retry-After`` (integer seconds *or* HTTP-date) on 429s, waiting at
-  least that long;
+  least that long; a backoff or ``Retry-After`` longer than the call's remaining
+  deadline is not slept -- the call fails at once;
 - waits on a per-host client-side rate limit (:mod:`vep_link.api.rate_limit`)
   before each attempt, adapted from Ensembl's ``Retry-After`` / ``X-RateLimit-*``;
-- fails fast (no retry) on a 403 (Ensembl refusing this deployment, #129) and on
+- fails fast (no retry) on a 401/403 (Ensembl refusing this deployment, #129), on
+  any other unexpected 4xx (an upstream fault, never ``invalid_input``), and on
   deterministic input errors ``{400, 404, 410, 422}``,
   except a 400 that carries no Ensembl ``{"error": ...}`` body, which is an
   upstream flake (retried, then ``upstream_unavailable``);
@@ -64,7 +66,7 @@ _upstream_log = structlog.get_logger("vep_link.api.upstream")
 _ENDPOINT_SEGMENT_RE = re.compile(r"^[a-z_]+$")
 
 # Transient upstream faults worth retrying (rate limit + 5xx gateway errors).
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 # Deterministic client errors: the request shape is wrong and will never succeed.
 _INPUT_ERROR_STATUS = frozenset({400, 404, 410, 422})
 # Bounded read of a 400 body: matched against fixed patterns only, never surfaced.
@@ -312,7 +314,9 @@ class BaseHTTPClient:
             if attempt > 0 and remaining <= 0:
                 _raise_terminal(last_exc, url)
             # The rate-limit wait never outlasts this call's remaining budget.
+            wait_start = loop.time()
             await bucket.acquire(max_wait=max(0.0, remaining))
+            slot_start = loop.time()
             # Wait for a concurrency slot with a fresh per-attempt budget
             # (backpressure is independent of the read/deadline budget). Using an
             # absolute deadline here would make a retry after a slow first attempt
@@ -320,6 +324,8 @@ class BaseHTTPClient:
             await self._acquire_slot(timeout=float(self._settings.QUEUE_WAIT_TIMEOUT))
             retry_after: float | None = None
             attempt_start = loop.time()
+            rate_wait_ms = int((slot_start - wait_start) * 1000)
+            slot_wait_ms = int((attempt_start - slot_start) * 1000)
             status[0] = None
             try:
                 return await self._read_capped(
@@ -330,16 +336,18 @@ class BaseHTTPClient:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 code = exc.response.status_code
-                if code == 403:
-                    # Ensembl's load balancer refusing this deployment: retrying or
-                    # rewording the input cannot help, so never retry it (#129).
-                    raise UpstreamBlockedError(_BLOCKED_MESSAGE) from exc
+                if code in (401, 403):
+                    # Ensembl refusing this deployment: retrying or rewording the
+                    # input cannot help, so never retry it (#129).
+                    raise UpstreamBlockedError(_blocked_message(code)) from exc
                 if code in _INPUT_ERROR_STATUS:
                     raise UpstreamInputError(_safe_upstream_input_message(code)) from exc
                 if code not in _RETRYABLE_STATUS:
-                    # Other non-retryable 4xx (e.g. 401): deterministic input error.
-                    raise UpstreamInputError(_safe_upstream_input_message(code)) from exc
+                    # Any other 4xx is not the caller's input: an upstream fault.
+                    raise EnsemblApiError(f"Upstream HTTP {code} for {url}") from exc
                 if is_last:
+                    if code == 408:
+                        raise UpstreamTimeoutError(f"Upstream request timed out: {url}") from exc
                     if code == 429:
                         raise RateLimitedError(
                             f"Rate limited by upstream (HTTP 429) after retries: {url}"
@@ -369,31 +377,37 @@ class BaseHTTPClient:
                     attempt=attempt,
                     status=status[0],
                     elapsed_ms=int(elapsed_ms),
+                    rate_wait_ms=rate_wait_ms,
+                    slot_wait_ms=slot_wait_ms,
                 )
 
-            await self._backoff(attempt, retry_after)
+            wait = self._backoff_delay(attempt, retry_after)
+            if wait >= op_deadline - loop.time():
+                # Sleeping past the deadline only to fail then: fail now.
+                _raise_terminal(last_exc, url)
+            await self._sleep(wait)
 
         # Unreachable: the loop either returns or raises on the final attempt.
         raise EnsemblApiError(  # pragma: no cover
             f"Retry loop exhausted for {url}: {last_exc!s}"
         )
 
-    async def _backoff(self, attempt: int, retry_after: float | None) -> None:
-        """Sleep a jittered exponential delay, honoring a 429 ``Retry-After``."""
+    def _backoff_delay(self, attempt: int, retry_after: float | None) -> float:
+        """A jittered exponential delay, at least a 429's ``Retry-After``."""
         base = self._settings.BACKOFF_BASE_SECONDS
         cap = self._settings.BACKOFF_MAX_SECONDS
         delay = min(base * (2**attempt), cap)
         wait = random.uniform(0, delay)  # noqa: S311 - jitter, not crypto
-        if retry_after is not None:
-            wait = max(wait, retry_after)
-        await self._sleep(wait)
+        return wait if retry_after is None else max(wait, retry_after)
 
 
-_BLOCKED_MESSAGE = (
-    "Ensembl refused this server's request (HTTP 403). Ensembl answers 403 when a "
-    "client address sent too many requests or is blocked; the input is not the "
-    "problem. Do not reword it; retry much later."
-)
+def _blocked_message(status: int) -> str:
+    """Fixed message for a 401/403: Ensembl refusing this deployment, not the input."""
+    return (
+        f"Ensembl refused this server's request (HTTP {status}). Ensembl answers 403 "
+        "when a client address sent too many requests or is blocked; the input is not "
+        "the problem. Do not reword it; retry much later."
+    )
 
 
 def _endpoint(url: str) -> str:
@@ -413,7 +427,9 @@ def _raise_terminal(last_exc: BaseException | None, url: str) -> None:
     layer classifies the budget-exhausted outcome the same as a normal
     retries-exhausted outcome.
     """
-    if isinstance(last_exc, httpx.TimeoutException):
+    if isinstance(last_exc, httpx.TimeoutException) or (
+        isinstance(last_exc, httpx.HTTPStatusError) and last_exc.response.status_code == 408
+    ):
         raise UpstreamTimeoutError(f"Upstream deadline exceeded (timeout): {url}") from last_exc
     if isinstance(last_exc, httpx.HTTPStatusError):
         status = last_exc.response.status_code
