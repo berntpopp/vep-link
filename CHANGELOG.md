@@ -14,7 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Variant Recoder lookups within `VEP_LINK_COALESCE_WINDOW_MS` (50 ms) share one POST of
   up to 200 variants, so `annotate_variants_batch` and bursts of `annotate_variant` /
   `resolve_variant` calls send ceil(N/200) POSTs instead of N requests. A whole-POST 400
-  is split per item so one bad variant cannot fail the others.
+  is bisected until the bad item fails alone (about 2·log2(n) POSTs, not n), so one
+  bad variant cannot fail the others. Every coalesced caller's `_meta.timing.upstream_ms`
+  includes the shared POST, not only the caller that triggered it.
 - A client-side token bucket per Ensembl host (`VEP_LINK_RATE_LIMIT_PER_SECOND` 8/s,
   `VEP_LINK_RATE_LIMIT_BURST` 4) honours `Retry-After` and `X-RateLimit-Remaining`/`-Reset`.
 - One `ensembl_request` log line per upstream attempt (host, endpoint, batch size,

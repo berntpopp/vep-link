@@ -138,7 +138,7 @@ async def test_whole_post_400_is_split_so_one_bad_item_fails_alone(fast: Setting
     finally:
         await client.aclose()
 
-    assert route.call_count == 4  # the shared POST, then one per item
+    assert route.call_count == 5  # shared POST, bisected halves [1] + [bad, 3], then [bad] + [3]
     assert results[0] == [{"input": lines[0]}]
     assert isinstance(results[1], UpstreamInputError)
     assert results[2] == [{"input": lines[2]}]
@@ -158,6 +158,60 @@ async def test_whole_post_failure_reaches_every_waiter(fast: Settings) -> None:
 
     assert all(isinstance(r, EnsemblApiError) for r in results)
     assert route.call_count == fast.MAX_RETRIES + 1  # retried as one POST, not per caller
+
+
+@respx.mock
+async def test_whole_post_400_bisects_instead_of_one_post_per_item(fast: Settings) -> None:
+    """One bad line among 200 must not fan out into 200 single POSTs (a burst)."""
+    client = EnsemblClient(fast)
+    bad = "1 7 . A T . . ."
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted = json.loads(request.content)["variants"]
+        if bad in posted:
+            return httpx.Response(400, json={"error": "does not match reference allele"})
+        return httpx.Response(200, json=[{"input": line} for line in posted])
+
+    route = respx.post(REGION_URL).mock(side_effect=handler)
+    lines = [f"1 {i} . A T . . ." for i in range(200)]
+    try:
+        results = await asyncio.gather(
+            *(client.vep_region_post([line], GRCH38) for line in lines), return_exceptions=True
+        )
+    finally:
+        await client.aclose()
+    assert route.call_count <= 1 + 2 * math.ceil(math.log2(200))
+    assert isinstance(results[7], UpstreamInputError)
+    assert sum(isinstance(r, list) for r in results) == 199
+
+
+@respx.mock
+async def test_every_coalesced_caller_gets_the_shared_post_upstream_time(
+    fast: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_meta.timing.upstream_ms must not be 0 for all but the flushing caller."""
+    from vep_link.observability import telemetry
+
+    client = EnsemblClient(fast)
+    respx.post(REGION_URL).mock(
+        side_effect=lambda request: httpx.Response(
+            200, json=[{"input": v} for v in json.loads(request.content)["variants"]]
+        )
+    )
+    monkeypatch.setattr(
+        "vep_link.api.base_client.record_upstream", lambda ms: telemetry.record_upstream(5.0)
+    )
+
+    async def one(line: str) -> int:
+        telemetry.reset()
+        await client.vep_region_post([line], GRCH38)
+        return telemetry.get_upstream_ms()
+
+    try:
+        times = await asyncio.gather(*(one(f"1 {i} . A T . . .") for i in range(3)))
+    finally:
+        await client.aclose()
+    assert times == [5, 5, 5]
 
 
 @respx.mock
