@@ -113,8 +113,9 @@ Coordinate and CNV inputs skip the recoder and can be annotated directly:
 ### Response envelope (v0.2)
 
 `resolve_variant` and `annotate_variant` return
-`{query, assembly, variants[], warnings[]}`. A multi-allelic input (e.g. `rs6025`)
-expands to **one entry per ALT allele** in `variants[]` (deterministically sorted)
+`{query, assembly, results[], warnings[]}`; every data result carries its provenance in
+`_meta` (`source`, `data_version`, `retrieved_at`). A multi-allelic input (e.g. `rs6025`)
+expands to **one entry per ALT allele** in `results[]` (deterministically sorted)
 with a `multiple_alts` warning, instead of a silent single pick — pass `allele`
 (an ALT base or full `CHR-POS-REF-ALT`) to filter to one ALT. `liftover_variant`
 validates the lifted REF against the target assembly and emits a

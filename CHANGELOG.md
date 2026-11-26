@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-26
+
+### Changed
+
+- **Wire note (response shape).** The payload key is now `results` or `result`, as the
+  Response-Envelope Standard v1 §1 requires: `resolve_variant` and `annotate_variant` return
+  their per-allele list as `results` (was `variants`), and `liftover_variant` returns
+  `{input, from_assembly, to_assembly, lifted, mapped_region}` under `result` (was spread over
+  the top level). `warnings`, `provenance`, `query`, `assembly` and `_meta` stay where they
+  were; `recode_variant`, `annotate_variants_batch`, `get_capabilities` and
+  `check_upstream_health` are unchanged.
+- `annotate_variant`'s `provenance.retrieved` is the time of the Ensembl fetch (the same value
+  as `_meta.retrieved_at`), no longer the time of the response, so a cache hit reports when
+  its entry was filled.
+
+### Added
+
+- Response-Envelope Standard v1.2 provenance in `_meta` of every successful data result
+  (#141): `source` (`ensembl`), `data_version` (the Ensembl release the host reports at
+  `/info/data`, read by the background health probe; `live` until a probe has reported one)
+  and `retrieved_at` (RFC 3339 UTC; for a cache hit the time of the fetch that filled the
+  entry, for several fetches the oldest).
+- `_meta.elapsed_ms`, the standard's location; `_meta.timing.elapsed_ms` stays.
+- Every data tool's result is validated against the published envelope schema v1.2.0 in the
+  test suite; the vendored behaviour gate checks the provenance rule.
+
 ## [1.2.7] - 2026-11-22
 
 ### Changed

@@ -92,7 +92,7 @@ async def test_resolve_variant_success(facade, stub_service: StubService) -> Non
     assert data["success"] is True
     # Returns the stub's resolve_return in the new variants[] shape.
     expected = stub_service.resolve_return["variants"][0]
-    first = data["variants"][0]
+    first = data["results"][0]
     assert first["variant_id"] == expected["variant_id"]
     assert first["gene_symbol"] == expected["gene_symbol"]
     assert first["most_severe_consequence"] == "missense_variant"
@@ -149,7 +149,7 @@ async def test_annotate_variant_compact_success(facade, stub_service: StubServic
     # variants[] of one; each entry shaped to compact (representative_transcript).
     assert data["query"] == "1-1000-A-T"
     assert data["warnings"] == []
-    first = data["variants"][0]
+    first = data["results"][0]
     assert first["variant_id"] == "1-1000-A-T"
     assert "representative_transcript" in first
     # Annotation results carry provenance + a _meta with the capabilities hash.
@@ -198,7 +198,7 @@ async def test_annotate_variant_standard_truncation_steer(
             "annotate_variant", {"variant": "1-1000-A-T", "response_mode": "standard"}
         )
     )
-    first = data["variants"][0]
+    first = data["results"][0]
     # Default (auto) standard view shows 1 of 2 and says so per-variant in-row.
     assert len(first["transcript_consequences"]) == 1
     assert first["transcripts_summary"] == {"shown": 1, "collapsed": 0, "total": 2}
@@ -223,7 +223,7 @@ async def test_annotate_variant_transcripts_all_returns_every_transcript(
             {"variant": "1-1000-A-T", "response_mode": "standard", "transcripts": "all"},
         )
     )
-    first = data["variants"][0]
+    first = data["results"][0]
     assert len(first["transcript_consequences"]) == 2
     assert "transcripts_summary" not in first
 
@@ -252,7 +252,7 @@ async def test_annotate_variant_multi_alt_carries_warning(
         ],
     }
     data = structured(await facade.call_tool("annotate_variant", {"variant": "rs6025"}))
-    assert [v["variant_id"] for v in data["variants"]] == ["1-169549811-C-A", "1-169549811-C-T"]
+    assert [v["variant_id"] for v in data["results"]] == ["1-169549811-C-A", "1-169549811-C-T"]
     assert data["warnings"][0]["code"] == "multiple_alts"
 
 
@@ -347,7 +347,7 @@ async def test_liftover_variant_success(facade, stub_service: StubService) -> No
             },
         )
     )
-    assert data["lifted"] == stub_service.liftover_return["lifted"]
+    assert data["result"]["lifted"] == stub_service.liftover_return["lifted"]
     assert data["warnings"] == []  # clean lift carries an empty warnings channel
     assert data["_meta"]["tool"] == "liftover_variant"
     name, kwargs = stub_service.calls[-1]

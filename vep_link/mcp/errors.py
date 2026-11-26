@@ -5,7 +5,8 @@ banner; see ``docs/RESPONSE-ENVELOPE-STANDARD-v1.md`` in genefoundry-router) at
 this backend's sole MCP error boundary, :func:`run_mcp_tool`:
 
 * **Success**: the tool body's dict is returned with a top-level ``success:
-  true`` injected (its own keys and ``_meta`` are otherwise untouched).
+  true`` injected, the payload framed under ``results``/``result`` (v1 §1) and
+  the v1.2 provenance stamped into ``_meta``.
 * **Failure**: a FLAT in-band frame -- ``{"success": false, "error_code",
   "message", "retryable", "recovery_action", "_meta": {...}}`` -- built by
   :func:`mcp_tool_error`. There is no nested ``error: {...}`` block (OQ4 of the
@@ -79,6 +80,7 @@ from vep_link.observability.metrics import METRICS
 from vep_link.observability.telemetry import (
     get_cache_status,
     get_upstream_ms,
+    retrieved_at,
 )
 from vep_link.observability.telemetry import (
     reset as reset_telemetry,
@@ -382,9 +384,28 @@ def _stamp_elapsed(envelope: dict[str, Any], start: float) -> int:
                 timing = {}
                 meta["timing"] = timing
             timing["elapsed_ms"] = elapsed_ms
+            meta["elapsed_ms"] = elapsed_ms  # the v1 §4 location; `timing` keeps its copy
             timing["upstream_ms"] = get_upstream_ms()
             timing["cache_status"] = get_cache_status()
     return elapsed_ms
+
+
+# Ops/meta tools return no upstream data: no payload key, no provenance (v1.2 carve-out).
+_OPS_TOOLS = frozenset({"get_capabilities", "check_upstream_health"})
+_FRAME_KEYS = frozenset({"success", "_meta", "warnings"})
+
+
+def _frame_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Put the payload under ``results`` (array) or ``result`` (object), v1 §1.
+
+    Returns a new dict: the body's dict may be a cached service value and is not edited.
+    """
+    if "results" in result or "result" in result:
+        return result
+    if "variants" in result:
+        return {("results" if k == "variants" else k): v for k, v in result.items()}
+    frame = {k: v for k, v in result.items() if k in _FRAME_KEYS}
+    return {"result": {k: v for k, v in result.items() if k not in _FRAME_KEYS}, **frame}
 
 
 def _internal_error_envelope(exc: BaseException, ctx: McpErrorContext) -> dict[str, Any]:
@@ -488,6 +509,12 @@ async def run_mcp_tool(
             meta = {}
             result["_meta"] = meta
         meta["unsafe_for_clinical_use"] = True
+        if ctx.tool_name not in _OPS_TOOLS:
+            result = _frame_payload(result)
+            # Response-Envelope v1.2 provenance, stamped here once for every data tool.
+            meta["source"] = "ensembl"
+            meta["data_version"] = ctx.health.data_version(ctx.assembly) if ctx.health else "live"
+            meta["retrieved_at"] = retrieved_at()
         elapsed_ms = _stamp_elapsed(result, start)
     METRICS.record_tool_call(ctx.tool_name, outcome="success", code=None, elapsed_ms=elapsed_ms)
     log_tool_call(

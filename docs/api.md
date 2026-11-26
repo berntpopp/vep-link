@@ -119,7 +119,7 @@ which owns hard failures. Each entry is `{code, message, context}`:
 
 | `code` | Raised when | `context` |
 |--------|-------------|-----------|
-| `multiple_alts` | A single input resolved to several ALT alleles (all returned in `variants[]`). For a protein-change input, the allele whose representative `hgvsp` matches comes first and is named. | `{count, variants, matches_protein_change?}` |
+| `multiple_alts` | A single input resolved to several ALT alleles (all returned in `results[]`). For a protein-change input, the allele whose representative `hgvsp` matches comes first and is named. | `{count, variants, matches_protein_change?}` |
 | `ref_not_validated` | A lifted REF did not match the target-assembly reference base (alleles omitted; coordinate-only `lifted`). | `{expected_ref, carried_ref}` |
 | `requested_transcript_not_found` | The HGVS names a transcript (NM_/ENST) that is not among the transcripts VEP returned; the representative (and `gene_symbol`) is another transcript, and the variant carries `requested_transcript_matched: false`. | `{requested_transcript, chosen_transcript, chosen_mane_select}` |
 | `resolved_via_vep_hgvs` | The Variant Recoder failed upstream, so the HGVS was resolved through VEP's own HGVS endpoint (single pick). | `{resolution_path, unavailable}` |

@@ -170,7 +170,7 @@ def test_mcp_tool_error_generates_request_id_when_absent() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_run_mcp_tool_injects_success_true_and_preserves_payload_identity() -> None:
+async def test_run_mcp_tool_injects_success_true_and_frames_the_payload() -> None:
     payload = {
         "variant_id": "1-100-A-T",
         "_meta": {"tool": "resolve_variant", "request_id": "abc", "capabilities_version": "x"},
@@ -180,9 +180,9 @@ async def test_run_mcp_tool_injects_success_true_and_preserves_payload_identity(
         return payload
 
     result = await run_mcp_tool("resolve_variant", body, _ctx())
-    # Same dict object, mutated in place -- the wrapper only injects success + _meta.
-    assert result is payload
+    # A flat record is framed under `result` (v1 §1) in a new dict.
     assert isinstance(result, dict)
+    assert result["result"] == {"variant_id": "1-100-A-T"}
     assert result["success"] is True
     assert "error" not in result
     assert result["_meta"]["unsafe_for_clinical_use"] is True

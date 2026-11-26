@@ -28,7 +28,7 @@ from pydantic import Field
 from vep_link.config import settings
 from vep_link.mcp.annotations import READ_ONLY_OPEN_WORLD
 from vep_link.mcp.errors import McpErrorContext, run_mcp_tool
-from vep_link.mcp.resources import build_meta, provenance, utc_now_iso
+from vep_link.mcp.resources import build_meta, provenance
 from vep_link.mcp.shaping import shape_annotation
 from vep_link.mcp.tools._common import (
     ensure_upstream_available,
@@ -39,6 +39,7 @@ from vep_link.mcp.tools._common import (
 )
 from vep_link.mcp.untrusted_content import enforce_untrusted_text_limits
 from vep_link.models.enums import GenomeBuild
+from vep_link.observability.telemetry import retrieved_at
 
 # Measured v1.1 exception (record in the router inventory): 200 inputs x up to 10
 # fenced co-located entries each (live hotspots carry 1-3 after COSMIC removal).
@@ -161,7 +162,7 @@ def register_annotate_tools(
                 description=(
                     "Optional ALT filter for a multi-allelic input: an ALT base "
                     "(e.g. 'A') or a full CHR-POS-REF-ALT. Omit to annotate every "
-                    "ALT allele (each as an entry in variants[])."
+                    "ALT allele (each as an entry in results[])."
                 ),
             ),
         ] = None,
@@ -205,7 +206,7 @@ def register_annotate_tools(
                 "provenance": provenance(
                     assembly=assembly,
                     endpoint=_vep_region_endpoint(assembly),
-                    retrieved=utc_now_iso(),
+                    retrieved=retrieved_at(),  # same fetch time as _meta.retrieved_at
                 ),
                 "_meta": build_meta(
                     tool="annotate_variant",

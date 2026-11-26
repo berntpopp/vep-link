@@ -26,14 +26,14 @@ __all__ = [
 def multiple_alts_warning(variants: list[str], *, matching: str | None = None) -> dict[str, Any]:
     """Signal that a single input resolved to several ALT alleles.
 
-    All resolved alleles are returned in ``variants[]``; the warning makes the
+    All resolved alleles are returned in ``results[]``; the warning makes the
     ambiguity explicit so the agent does not assume a single silent pick.
     ``matching`` names the allele whose representative ``hgvsp`` is the
     requested protein change (listed first, #136).
     """
     warning: dict[str, Any] = {
         "code": "multiple_alts",
-        "message": f"Input maps to {len(variants)} ALT alleles; all are returned in variants[].",
+        "message": f"Input maps to {len(variants)} ALT alleles; all are returned in results[].",
         "context": {"count": len(variants), "variants": list(variants)},
     }
     if matching is not None:

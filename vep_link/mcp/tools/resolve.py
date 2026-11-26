@@ -61,12 +61,12 @@ def register_resolve_tools(
                 description=(
                     "Optional ALT filter for a multi-allelic input: an ALT base "
                     "(e.g. 'A') or a full CHR-POS-REF-ALT. Omit to return every ALT "
-                    "allele in variants[]."
+                    "allele in results[]."
                 ),
             ),
         ] = None,
     ) -> dict[str, Any]:
-        """Use this when the caller's variant is an rsID, HGVS, SPDI, or loosely formatted: returns a variants[] list (one entry per ALT allele) with the canonical CHR-POS-REF-ALT variant_id, gene_symbol and most_severe_consequence that the annotation tools build on, plus a top-level warnings[] (a multi-allelic input carries a multiple_alts warning). Coordinates are normalized locally; rsIDs/HGVS are recoded via Ensembl. Cheap (<1kB). Then call annotate_variant for the full VEP annotation."""
+        """Use this when the caller's variant is an rsID, HGVS, SPDI, or loosely formatted: returns a results[] list (one entry per ALT allele) with the canonical CHR-POS-REF-ALT variant_id, gene_symbol and most_severe_consequence that the annotation tools build on, plus a top-level warnings[] (a multi-allelic input carries a multiple_alts warning). Coordinates are normalized locally; rsIDs/HGVS are recoded via Ensembl. Cheap (<1kB). Then call annotate_variant for the full VEP annotation."""
 
         health = health_factory() if health_factory else None
 

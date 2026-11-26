@@ -16,7 +16,7 @@ def test_multiple_alts_warning_shape() -> None:
     w = multiple_alts_warning(["1-169549811-C-A", "1-169549811-C-T"])
     assert w == {
         "code": "multiple_alts",
-        "message": "Input maps to 2 ALT alleles; all are returned in variants[].",
+        "message": "Input maps to 2 ALT alleles; all are returned in results[].",
         "context": {"count": 2, "variants": ["1-169549811-C-A", "1-169549811-C-T"]},
     }
 

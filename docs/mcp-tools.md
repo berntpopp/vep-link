@@ -111,11 +111,11 @@ rsID/HGVS/SPDI are recoded via Ensembl, then a single VEP region POST fills the
 gene/consequence summary. Cheap (sub-kilobyte). Then call `annotate_variant` for
 the full annotation.
 
-**v0.2 contract.** Returns `{query, assembly, variants[], warnings[]}`. A
+**v0.2 contract.** Returns `{query, assembly, results[], warnings[]}`. A
 multi-allelic input (e.g. `rs6025`, which maps to both C>A and C>T) expands to
 **one entry per ALT allele** — deterministically sorted — instead of a silent
 single pick, and carries a `multiple_alts` warning. Single-alt inputs yield a
-`variants` of length 1 and `warnings: []`.
+`results` of length 1 and `warnings: []`.
 
 **Arguments.**
 
@@ -137,12 +137,12 @@ single pick, and carries a `multiple_alts` warning. Single-alt inputs yield a
 {
   "query": "rs6025",
   "assembly": "GRCh38",
-  "variants": [
+  "results": [
     {"variant_id": "1-169549811-C-A", "assembly": "GRCh38", "gene_symbol": "F5", "most_severe_consequence": "missense_variant"},
     {"variant_id": "1-169549811-C-T", "assembly": "GRCh38", "gene_symbol": "F5", "most_severe_consequence": "missense_variant"}
   ],
   "warnings": [
-    {"code": "multiple_alts", "message": "Input maps to 2 ALT alleles; all are returned in variants[].",
+    {"code": "multiple_alts", "message": "Input maps to 2 ALT alleles; all are returned in results[].",
      "context": {"count": 2, "variants": ["1-169549811-C-A", "1-169549811-C-T"]}}
   ],
   "_meta": {
@@ -220,9 +220,9 @@ predictors (SIFT, PolyPhen, **CADD**, **REVEL**, **AlphaMissense**, **GERP**), a
 gnomAD frequencies. The input is parsed, recoded if needed, sent to the VEP region
 endpoint, then shaped to `response_mode`. Carries a `provenance` block.
 
-**v0.2 contract.** Returns `{query, assembly, variants[], warnings[], provenance,
-_meta}`. Each element of `variants[]` is one ALT allele shaped to `response_mode`
-(so the per-tier fields below live inside `variants[i]`, not at the top level). A
+**v0.2 contract.** Returns `{query, assembly, results[], warnings[], provenance,
+_meta}`. Each element of `results[]` is one ALT allele shaped to `response_mode`
+(so the per-tier fields below live inside `results[i]`, not at the top level). A
 multi-allelic input expands to several entries + a `multiple_alts` warning; pass
 `allele` to annotate just one ALT. When the `standard` view is truncated, each
 variant carries its own `transcripts_summary` `{shown, total}` in-row.
@@ -326,8 +326,8 @@ substitution signal (no HGVS, SIFT/PolyPhen, REVEL, or AlphaMissense) — e.g. a
 ### Example output per tier (`1-169549811-T-C`, F5 Leiden)
 
 > **v0.2 envelope.** Each block below is the projection of a single ALT — it is
-> the shape of one element of `variants[]`. The full response wraps these:
-> `{"query": "...", "assembly": "GRCh38", "variants": [ <block> ], "warnings": [],
+> the shape of one element of `results[]`. The full response wraps these:
+> `{"query": "...", "assembly": "GRCh38", "results": [ <block> ], "warnings": [],
 > "provenance": {...}, "_meta": {...}}`. The `provenance`/`_meta` shown inside the
 > blocks are top-level on the real response (one per call, not per variant).
 
@@ -502,7 +502,7 @@ assemblies must differ. HGVS/rsID inputs are unsupported — resolve them first.
 input REF/ALT are carried through unchanged — which can be wrong if the reference
 base differs between builds. The lifted REF is now validated against the target
 assembly (via `/sequence/region`): on a **match** the full `CHR-POS-REF-ALT` is
-returned; on a **mismatch** the `lifted` value is coordinate-only (`CHR-POS`) and
+returned; on a **mismatch** the `result.lifted` value is coordinate-only (`CHR-POS`) and
 a `ref_not_validated` warning names the expected vs carried base. Every response
 carries a top-level `warnings[]` (`[]` on a clean lift). Gated by
 `VEP_LINK_LIFTOVER_VALIDATE_REF` (default `true`).
@@ -525,11 +525,13 @@ carries a top-level `warnings[]` (`[]` on a clean lift). Gated by
 
 ```json
 {
-  "input": "1-169519049-T-C",
-  "from_assembly": "GRCh37",
-  "to_assembly": "GRCh38",
-  "lifted": "1-169549811-T-C",
-  "mapped_region": "1:169549811",
+  "result": {
+    "input": "1-169519049-T-C",
+    "from_assembly": "GRCh37",
+    "to_assembly": "GRCh38",
+    "lifted": "1-169549811-T-C",
+    "mapped_region": "1:169549811"
+  },
   "warnings": [],
   "_meta": {"tool": "liftover_variant", "request_id": "...", "assembly": "GRCh38", "...": "..."}
 }
@@ -539,8 +541,8 @@ On a REF mismatch the alleles are dropped and a warning is added:
 
 ```json
 {
-  "input": "1-169549811-C-A", "from_assembly": "GRCh38", "to_assembly": "GRCh37",
-  "lifted": "1-169519049", "mapped_region": "1:169519049",
+  "result": {"input": "1-169549811-C-A", "from_assembly": "GRCh38", "to_assembly": "GRCh37",
+    "lifted": "1-169519049", "mapped_region": "1:169519049"},
   "warnings": [{"code": "ref_not_validated",
     "message": "Lifted coordinate's reference base does not match the target assembly; alleles omitted. Re-resolve in the target assembly for a usable variant.",
     "context": {"expected_ref": "T", "carried_ref": "C"}}]
