@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
 from typing import Any
 
 from vep_link import __version__
@@ -192,7 +191,7 @@ _NOTES = [
     ),
     (
         "Allele-correctness contract (v0.2): resolve_variant and annotate_variant "
-        "return {query, assembly, variants[], warnings[]} -- a multi-allelic input "
+        "return {query, assembly, results[], warnings[]} -- a multi-allelic input "
         "(e.g. rs6025) expands to one entry per ALT allele instead of a silent "
         "single pick, with a multiple_alts warning (annotate_variants_batch returns "
         "one result per ALT, each tagged with its input). Pass the optional allele "
@@ -298,15 +297,6 @@ def build_meta(
         **({"assembly": assembly} if assembly else {}),
         **(extra or {}),
     }
-
-
-def utc_now_iso() -> str:
-    """Return the current UTC wall-clock time as an ISO-8601 string.
-
-    Used to stamp ``provenance.retrieved`` so a result records *when* it was
-    fetched from Ensembl rather than carrying a misleading ``null`` placeholder.
-    """
-    return datetime.now(UTC).isoformat()
 
 
 def provenance(

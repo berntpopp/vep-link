@@ -23,7 +23,9 @@ current context. Two consequences shape the design:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from typing import Any
 
 from async_lru import alru_cache
@@ -33,12 +35,15 @@ _cache_status: ContextVar[str] = ContextVar("vep_link_cache_status", default="mi
 # boundary async_lru introduces on a miss -- see the module docstring. No default:
 # a context that never called reset() reads as 0 via the LookupError guards below.
 _upstream_ms: ContextVar[list[float]] = ContextVar("vep_link_upstream_ms")
+# Fetch times of the cache entries this request was served from (same container trick).
+_fetched_at: ContextVar[list[datetime]] = ContextVar("vep_link_fetched_at")
 
 
 def reset() -> None:
     """Reset both telemetry vars; call once at the start of each tool body."""
     _cache_status.set("miss")
     _upstream_ms.set([0.0])
+    _fetched_at.set([])
 
 
 def set_cache_status(status: str) -> None:
@@ -70,6 +75,20 @@ def get_upstream_ms() -> int:
         return 0
 
 
+def retrieved_at() -> str:
+    """When the data of this request was fetched upstream (RFC 3339 UTC, ``Z``).
+
+    The oldest fetch among the cache entries the request read (Response-Envelope v1.2: a
+    cache hit keeps the time of the fetch that filled the entry); now for an uncached call.
+    """
+    try:
+        fetched = _fetched_at.get()
+    except LookupError:
+        fetched = []
+    oldest = min(fetched) if fetched else datetime.now(UTC)
+    return oldest.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def telemetry_cache[R](
     impl: Callable[..., Awaitable[R]], *, maxsize: int, ttl: float
 ) -> Callable[..., Awaitable[R]]:
@@ -92,10 +111,12 @@ def telemetry_cache[R](
     """
     inflight: set[tuple[Any, ...]] = set()
 
-    async def marking_impl(*args: Any) -> R:
+    async def marking_impl(*args: Any) -> tuple[R, datetime]:
         inflight.add(args)
         try:
-            return await impl(*args)
+            # The fetch time is cached with the value, so a hit reports it unchanged.
+            started = datetime.now(UTC)
+            return await impl(*args), started
         finally:
             inflight.discard(args)
 
@@ -106,6 +127,9 @@ def telemetry_cache[R](
             set_cache_status("coalesced" if args in inflight else "hit")
         else:
             set_cache_status("miss")
-        return await cached(*args)
+        value, fetched = await cached(*args)
+        with suppress(LookupError):  # no reset() in this context: nothing reads it
+            _fetched_at.get().append(fetched)
+        return value
 
     return wrapper

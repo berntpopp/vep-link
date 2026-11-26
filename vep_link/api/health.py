@@ -25,6 +25,7 @@ A monotonic ``clock`` is injected for deterministic breaker tests.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 
 _ASSEMBLIES: tuple[str, ...] = (GenomeBuild.GRCH38.value, GenomeBuild.GRCH37.value)
 _INFO_PING_PATH = "/info/ping"
+_INFO_DATA_PATH = "/info/data"
 
 
 @dataclass
@@ -52,6 +54,7 @@ class _HostState:
     checked_at: str | None = None
     latency_ms: int | None = None
     last_error: str | None = None
+    release: str | None = None
 
 
 @dataclass
@@ -171,7 +174,21 @@ class UpstreamHealth:
         st.checked_at = _now_iso()
         st.latency_ms = int((self.clock() - start) * 1000)
         self.record_success(key)
+        with contextlib.suppress(Exception):  # best effort: provenance, not a health signal
+            data = await self.http.get_json(
+                f"{self.settings.base_url(key)}{_INFO_DATA_PATH}",
+                {"content-type": "application/json"},
+            )
+            st.release = str(max(data["releases"]))
         return True
+
+    def data_version(self, assembly: str | GenomeBuild | None) -> str:
+        """The Ensembl release the host last reported (``_meta.data_version``), else ``live``.
+
+        ponytail: this is the host's release at the last probe, also for a cache hit fetched
+        under an earlier release; store the release with the cache entry if that matters.
+        """
+        return (self._host(assembly).release if assembly else None) or "live"
 
     async def refresh(self) -> None:
         """Probe every host (used by the background poller)."""

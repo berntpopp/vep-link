@@ -53,9 +53,9 @@ async def test_live_annotate_reflects_committed_shape() -> None:
     data = _structured(result)
 
     # v0.2 contract: the variants[] / warnings[] envelope is live.
-    assert data.get("variants"), "expected a non-empty variants[] (stale pre-0.2 deploy?)"
+    assert data.get("results"), "expected a non-empty results[] (stale pre-0.2 deploy?)"
     assert isinstance(data.get("warnings"), list)
-    first = data["variants"][0]
+    first = data["results"][0]
 
     # v0.1 token-efficiency: CADD/GERP hoisted ONCE to position_scores, never per row.
     assert first.get("position_scores"), (

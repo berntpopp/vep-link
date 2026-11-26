@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from typing import Any
 
 
 async def test_telemetry_cache_reports_miss_then_hit() -> None:
@@ -95,3 +96,33 @@ def test_get_upstream_ms_defaults_to_zero_in_fresh_context() -> None:
     from vep_link.observability import telemetry as t
 
     assert contextvars.Context().run(t.get_upstream_ms) == 0
+
+
+async def test_cache_hit_keeps_the_original_fetch_time(monkeypatch: Any) -> None:
+    """Response-Envelope v1.2: retrieved_at is the fetch that filled the entry."""
+    from datetime import UTC, datetime
+
+    from vep_link.observability import telemetry as t
+
+    clock = iter(datetime(2026, 11, 20, 8, 0, s, tzinfo=UTC) for s in range(60))
+
+    class FakeDatetime:
+        @staticmethod
+        def now(tz: Any = None) -> datetime:
+            return next(clock)
+
+    monkeypatch.setattr(t, "datetime", FakeDatetime)
+
+    async def impl(x: int) -> int:
+        return x
+
+    cached = t.telemetry_cache(impl, maxsize=8, ttl=60.0)
+    t.reset()
+    await cached(1)
+    assert t.retrieved_at() == "2026-11-20T08:00:00Z"
+    t.reset()
+    await cached(1)  # hit, later
+    await cached(2)  # miss, fetched later still: the oldest fetch wins
+    assert t.retrieved_at() == "2026-11-20T08:00:00Z"
+    t.reset()
+    assert t.retrieved_at() == "2026-11-20T08:00:02Z"  # uncached call: now

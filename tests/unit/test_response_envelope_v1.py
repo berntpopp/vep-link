@@ -6,8 +6,8 @@ Contract asserted here (ratified, OQ4 resolved 2026-06-30 -> flat banner):
 
 * **Success**: the tool body's dict is returned with a top-level
   ``success: true`` injected; its own payload keys and ``_meta`` are otherwise
-  passed through unchanged (no forced ``results``/``result`` rename -- that is
-  the OQ1 payload-key question, not in scope here).
+  passed through, with the payload framed under ``results`` (the service's
+  ``variants`` list) or ``result`` (a flat single record), v1 §1.
 * **Failure**: a FLAT in-band frame -- ``{"success": false, "error_code",
   "message", "retryable", "recovery_action", "_meta": {...}}`` -- never a
   nested ``{"error": {...}}`` block. The frame additionally rides the wire as
@@ -44,9 +44,21 @@ async def test_success_envelope_has_top_level_success_true() -> None:
     result = await run_mcp_tool(_TOOL, call, McpErrorContext(tool_name=_TOOL))
     assert isinstance(result, dict)
     assert result["success"] is True
-    # The body's own payload key (a domain-specific alias, not "results") is
-    # passed through unchanged -- the wrapper only injects success + _meta.
-    assert result["variants"] == [{"variant_id": "1-100-A-T"}]
+    # v1 §1: the payload key is `results`, never the service's own `variants`.
+    assert result["results"] == [{"variant_id": "1-100-A-T"}]
+    assert "variants" not in result
+
+
+async def test_flat_single_record_is_nested_under_result() -> None:
+    async def call() -> dict[str, Any]:
+        return {"lifted": "1-100-A-T", "warnings": [], "_meta": {"tool": "liftover_variant"}}
+
+    result = await run_mcp_tool(
+        "liftover_variant", call, McpErrorContext(tool_name="liftover_variant")
+    )
+    assert isinstance(result, dict)
+    assert result["result"] == {"lifted": "1-100-A-T"}
+    assert result["warnings"] == []
 
 
 async def test_single_result_payload_key_is_preserved_on_success() -> None:

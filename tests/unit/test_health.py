@@ -196,3 +196,22 @@ def test_host_view_reports_accepting_true_when_open_but_cooled_down(
     assert view_cooled["circuit"] == "open"
     assert view_cooled["accepting"] is True  # honest: allow() would now pass
     assert h._host("GRCh38").state == "open"  # snapshot did not flip it
+
+
+@respx.mock
+async def test_probe_records_the_ensembl_release_as_data_version(
+    health_settings: Settings,
+) -> None:
+    respx.get(GRCH38_PING).mock(return_value=httpx.Response(200, json={"ping": 1}))
+    respx.get("https://rest.ensembl.org/info/data").mock(
+        return_value=httpx.Response(200, json={"releases": [115]})
+    )
+    h = UpstreamHealth(health_settings, clock=FakeClock())
+    try:
+        assert h.data_version("GRCh38") == "live"  # nothing reported yet
+        assert await h.probe(GenomeBuild.GRCH38) is True
+    finally:
+        await h.aclose()
+    assert h.data_version("GRCh38") == "115"
+    assert h.data_version("GRCh37") == "live"
+    assert h.data_version(None) == "live"
