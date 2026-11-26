@@ -206,11 +206,14 @@ class EnsemblClient:
 
         Reads ``/sequence/region`` for a 1-bp window. ``content-type`` is forced
         to JSON via the query param so Ensembl returns ``{"seq": ...}`` rather than
-        FASTA. Returns ``None`` when the response carries no usable ``seq``.
+        FASTA. Always reads the main host with ``coord_system_version`` so the
+        liftover does not depend on grch37.rest.ensembl.org.
+        Returns ``None`` when the response carries no usable ``seq``.
         """
         region = f"{chrom}:{pos}..{pos}"
-        url = f"{self._settings.vep_url(build)}{SEQUENCE_REGION_PATH}/{quote(region, safe='')}"
-        payload = await self._http.get_json(url, {"content-type": "application/json"})
+        url = f"{self._settings.map_url(build)}{SEQUENCE_REGION_PATH}/{quote(region, safe='')}"
+        params = {"coord_system_version": build.value, "content-type": "application/json"}
+        payload = await self._http.get_json(url, params)
         seq = payload.get("seq") if isinstance(payload, dict) else None
         return seq.upper() if isinstance(seq, str) and seq else None
 

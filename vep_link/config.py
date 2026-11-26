@@ -246,7 +246,7 @@ class Settings(BaseSettings):
         return self.VEP_GRCH37_URL if _build_value(build) == "GRCh37" else self.VEP_GRCH38_URL
 
     # The Ensembl host is identical for VEP and Recoder; the distinct helpers
-    # exist for call-site readability. The assembly map always uses the main host.
+    # exist for call-site readability. Liftover (map and REF check) always uses the main host.
     def vep_url(self, build: GenomeBuild | str) -> str:
         return self.base_url(build)
 

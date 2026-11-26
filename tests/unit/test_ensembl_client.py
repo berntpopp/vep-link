@@ -345,7 +345,7 @@ async def test_injected_http_client_is_used_and_owned_by_caller(settings: Settin
 @respx.mock
 async def test_sequence_region_ref_returns_uppercased_base(client: EnsemblClient) -> None:
     # The /sequence/region read returns the reference base; the client uppercases it.
-    route = respx.get(url__regex=rf"{GRCH37_BASE}/sequence/region/human/.*169519049.*").mock(
+    route = respx.get(url__regex=rf"{GRCH38_BASE}/sequence/region/human/.*169519049.*").mock(
         return_value=httpx.Response(200, json={"seq": "t"})
     )
     try:
@@ -356,6 +356,9 @@ async def test_sequence_region_ref_returns_uppercased_base(client: EnsemblClient
     assert route.called
     # JSON is forced via the content-type query param (else Ensembl returns FASTA).
     assert route.calls.last.request.url.params["content-type"] == "application/json"
+    # GRCh37 is read from the main host by coordinate system, not from the GRCh37 mirror.
+    assert route.calls.last.request.url.host == "rest.ensembl.org"
+    assert route.calls.last.request.url.params["coord_system_version"] == "GRCh37"
 
 
 @respx.mock
