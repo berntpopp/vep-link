@@ -32,6 +32,8 @@ def test_build_aware_urls_enum() -> None:
     assert s.vep_url(GenomeBuild.GRCH38) == "https://rest.ensembl.org"
     assert s.recoder_url(GenomeBuild.GRCH37) == "https://grch37.rest.ensembl.org"
     assert s.map_url(GenomeBuild.GRCH38) == "https://rest.ensembl.org"
+    assert s.map_url(GenomeBuild.GRCH37) == "https://rest.ensembl.org"
+    assert s.map_url("GRCh37") == "https://rest.ensembl.org"
 
 
 def test_build_aware_urls_string() -> None:

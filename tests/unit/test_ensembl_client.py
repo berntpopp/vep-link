@@ -289,8 +289,8 @@ async def test_vep_hgvs_vcf_sends_lean_options_only(client: EnsemblClient) -> No
 
 
 @respx.mock
-async def test_assembly_map_uses_from_build_host_and_path(client: EnsemblClient) -> None:
-    route = respx.get(f"{GRCH37_BASE}/map/human/GRCh37/1:1000..1000/GRCh38").mock(
+async def test_assembly_map_uses_main_host_and_path(client: EnsemblClient) -> None:
+    route = respx.get(f"{GRCH38_BASE}/map/human/GRCh37/1:1000..1000/GRCh38").mock(
         return_value=httpx.Response(200, json=ASSEMBLY_MAP_ONE)
     )
     try:
@@ -300,12 +300,12 @@ async def test_assembly_map_uses_from_build_host_and_path(client: EnsemblClient)
 
     assert result == ASSEMBLY_MAP_ONE
     assert route.called
-    assert route.calls.last.request.url.host == "grch37.rest.ensembl.org"
+    assert route.calls.last.request.url.host == "rest.ensembl.org"
 
 
 @respx.mock
 async def test_assembly_map_quotes_region_segment(client: EnsemblClient) -> None:
-    route = respx.get(url__regex=rf"{GRCH37_BASE}/map/human/GRCh37/.+/GRCh38").mock(
+    route = respx.get(url__regex=rf"{GRCH38_BASE}/map/human/GRCh37/.+/GRCh38").mock(
         return_value=httpx.Response(200, json=ASSEMBLY_MAP_ONE)
     )
     try:
@@ -345,7 +345,7 @@ async def test_injected_http_client_is_used_and_owned_by_caller(settings: Settin
 @respx.mock
 async def test_sequence_region_ref_returns_uppercased_base(client: EnsemblClient) -> None:
     # The /sequence/region read returns the reference base; the client uppercases it.
-    route = respx.get(url__regex=rf"{GRCH37_BASE}/sequence/region/human/.*169519049.*").mock(
+    route = respx.get(url__regex=rf"{GRCH38_BASE}/sequence/region/human/.*169519049.*").mock(
         return_value=httpx.Response(200, json={"seq": "t"})
     )
     try:
@@ -356,6 +356,9 @@ async def test_sequence_region_ref_returns_uppercased_base(client: EnsemblClient
     assert route.called
     # JSON is forced via the content-type query param (else Ensembl returns FASTA).
     assert route.calls.last.request.url.params["content-type"] == "application/json"
+    # GRCh37 is read from the main host by coordinate system, not from the GRCh37 mirror.
+    assert route.calls.last.request.url.host == "rest.ensembl.org"
+    assert route.calls.last.request.url.params["coord_system_version"] == "GRCh37"
 
 
 @respx.mock

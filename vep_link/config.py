@@ -245,8 +245,8 @@ class Settings(BaseSettings):
         """Return the Ensembl REST base URL for an assembly."""
         return self.VEP_GRCH37_URL if _build_value(build) == "GRCh37" else self.VEP_GRCH38_URL
 
-    # The Ensembl host is identical for VEP, Recoder, and assembly map; the
-    # distinct helpers exist for call-site readability.
+    # The Ensembl host is identical for VEP and Recoder; the distinct helpers
+    # exist for call-site readability. Liftover (map and REF check) always uses the main host.
     def vep_url(self, build: GenomeBuild | str) -> str:
         return self.base_url(build)
 
@@ -254,7 +254,8 @@ class Settings(BaseSettings):
         return self.base_url(build)
 
     def map_url(self, build: GenomeBuild | str) -> str:
-        return self.base_url(build)
+        # The main host maps both directions; grch37.rest.ensembl.org returned HTTP 500 for /map.
+        return self.VEP_GRCH38_URL
 
     @property
     def cors_origins_list(self) -> list[str]:
