@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-26
+
+### Fixed
+
+- `liftover_variant` from GRCh37 failed: the assembly map was routed to
+  grch37.rest.ensembl.org, which returns HTTP 500 for `/map` in both directions. It now
+  always uses rest.ensembl.org, which maps GRCh37 to GRCh38 and back; the lifted REF is
+  still validated on the target assembly's host.
+
 ## [1.3.0] - 2026-11-26
 
 ### Changed

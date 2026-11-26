@@ -167,7 +167,8 @@ _NOTES = [
     ),
     (
         "GRCh38 is served from rest.ensembl.org and GRCh37 from "
-        "grch37.rest.ensembl.org; the assembly argument selects the host."
+        "grch37.rest.ensembl.org; the assembly argument selects the host. "
+        "liftover_variant maps on rest.ensembl.org in both directions."
     ),
     (
         "Batch annotation is capped at 200 variants per call; larger requests "

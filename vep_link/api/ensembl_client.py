@@ -221,8 +221,8 @@ class EnsemblClient:
     ) -> dict:
         """GET a coordinate liftover for ``region`` from ``from_build`` to ``to_build``.
 
-        Routes to the FROM build's host, since that is the assembly the input
-        region is expressed in.
+        Always routes to the main (GRCh38) host, which serves both directions;
+        grch37.rest.ensembl.org returned HTTP 500 for ``/map``.
         """
         url = (
             f"{self._settings.map_url(from_build)}{ASSEMBLY_MAP_PATH}"
